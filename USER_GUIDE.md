@@ -15,7 +15,8 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [3.4 File Upload Screen](#34-file-upload-screen)
     - [3.4.1 Calibre Wireless Transfers](#341-calibre-wireless-transfers)
     - [3.5 Settings](#35-settings)
-    - [3.6 Sleep Screen](#36-sleep-screen)
+    - [3.6 Flashcards Mode](#36-flashcards-mode)
+    - [3.7 Sleep Screen](#37-sleep-screen)
   - [4. Reading Mode](#4-reading-mode)
     - [Page Turning](#page-turning)
     - [Chapter Navigation](#chapter-navigation)
@@ -62,7 +63,7 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 ### 3.1 Home Screen
 
-The Home Screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Book Selection](#32-book-selection)**, **[Settings](#35-settings)**, or the **[File Upload](#34-file-upload-screen)** screen.
+The Home Screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, **[Book Selection](#32-book-selection)**, **[Flashcards](#36-flashcards-mode)**, **[Settings](#35-settings)**, or the **[File Upload](#34-file-upload-screen)** screen.
 
 ### 3.2 Book Selection
 
@@ -102,7 +103,7 @@ The Settings screen allows you to configure the device's behavior. There are a f
 - **Sleep Screen**: Which sleep screen to display when the device sleeps:
   - "Dark" (default) - The default dark Crosspoint logo sleep screen
   - "Light" - The same default sleep screen, on a white background
-  - "Custom" - Custom images from the SD card; see [Sleep Screen](#36-sleep-screen) below for more information
+  - "Custom" - Custom images from the SD card; see [Sleep Screen](#37-sleep-screen) below for more information
   - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
   - "None" - A blank screen
   - "Cover + Custom" - The book cover image, fallbacks to "Custom" behavior
@@ -161,7 +162,42 @@ The Settings screen allows you to configure the device's behavior. There are a f
 - **OPDS Browser**: Configure OPDS server settings for browsing and downloading books. Set the server URL (for Calibre Content Server, add `/opds` to the end), and optionally configure username and password for servers requiring authentication. Note: Only HTTP Basic authentication is supported. If using Calibre Content Server with authentication enabled, you must set it to use Basic authentication instead of the default Digest authentication.
 - **Check for updates**: Check for firmware updates over WiFi.
 
-### 3.6 Sleep Screen
+### 3.6 Flashcards Mode
+
+Flashcards mode lets you study term/translation pairs using an Anki-style adaptive SM-2++ scheduler.
+
+1. On the Home screen, select **Flashcards**.
+2. Flashcards are loaded automatically from all `.txt` files in `/flashcards` on the SD card.
+3. A flashcards start screen is shown with:
+   - Algorithm (`SM-2++`)
+   - Total cards (across all files)
+   - Memorized cards
+   - **Learn** button (Confirm)
+4. In study mode:
+   - Press **Left** for **Hard**.
+   - Press **Confirm** for **Good**.
+   - Press **Right** for **Easy**.
+   - Press **Up/Down** to flip prompt/translation.
+   - Press **Back** to return to Home.
+5. Study runs in persistent batches of 20 cards:
+   - `Hard`, `Good`, or `Easy` marks the current card as processed in the active batch.
+   - After 20 cards are processed, the next batch is loaded automatically.
+   - If you leave Flashcards and return later, the same active batch is restored.
+
+Deck format uses Quizlet-style term/translation pairs, one card per line.
+Tab-separated rows are preferred, and comma-separated rows are also accepted:
+
+```
+hello	hola
+How are you?	Como estas?
+```
+
+Supported flashcard source files: all `.txt` files in `/flashcards`.
+
+> [!NOTE]
+> Flashcard progress is saved globally in `/.crosspoint/flashcards_global.bin` and resumes automatically.
+
+### 3.7 Sleep Screen
 
 You can customize the sleep screen by placing custom images in specific locations on the SD card:
 

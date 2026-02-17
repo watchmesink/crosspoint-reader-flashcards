@@ -19,12 +19,16 @@
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
-constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION = 4;
+constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION = 5;
+constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION_LEGACY = 4;
 constexpr char FLASHCARD_PROGRESS_FILE[] = "/.crosspoint/flashcards_global.bin";
 constexpr char FLASHCARDS_FOLDER[] = "/flashcards";
 constexpr char FLASHCARDS_ALT_FOLDER[] = "/~/flashcards";
 constexpr size_t MAX_FLASHCARDS_TOTAL = 900;
 constexpr size_t FLASHCARD_BATCH_SIZE = 20;
+constexpr uint8_t CARD_TEXT_SIZE_SMALL = 0;
+constexpr uint8_t CARD_TEXT_SIZE_MEDIUM = 1;
+constexpr uint8_t CARD_TEXT_SIZE_LARGE = 2;
 
 constexpr std::array<uint16_t, 3> SM2PP_LEARNING_STEPS = {1, 8, 48};
 constexpr uint16_t SM2PP_MATURE_INTERVAL = 21;
@@ -113,6 +117,7 @@ void FlashcardsActivity::onEnter() {
 
   currentCardIndex = -1;
   showingAnswer = false;
+  cardTextSize = CARD_TEXT_SIZE_MEDIUM;
 
   screenMode = ScreenMode::START;
   statusMessage.clear();
@@ -165,6 +170,15 @@ void FlashcardsActivity::loop() {
   }
 
   if (screenMode == ScreenMode::START) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      adjustCardTextSize(-1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      adjustCardTextSize(1);
+      return;
+    }
+
     if (!cards.empty() && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       screenMode = ScreenMode::STUDY;
       if (currentCardIndex < 0 || currentCardIndex >= static_cast<int>(cards.size())) {
@@ -189,12 +203,12 @@ void FlashcardsActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    rateCurrentCard(Sm2ppRating::HARD);
+    rateCurrentCard(Sm2ppRating::GOOD);
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    rateCurrentCard(Sm2ppRating::GOOD);
+    rateCurrentCard(Sm2ppRating::HARD);
     return;
   }
 
@@ -231,17 +245,18 @@ void FlashcardsActivity::render() const {
 
   if (screenMode == ScreenMode::START || cards.empty() || currentCardIndex < 0 ||
       currentCardIndex >= static_cast<int>(cards.size())) {
-    renderer.drawCenteredText(UI_12_FONT_ID, contentTop + 10, "SM-2++", true, EpdFontFamily::BOLD);
-
     if (cards.empty()) {
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 45, "No flashcards loaded");
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 70, "Put .txt files into /flashcards");
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 30, "No flashcards loaded");
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 55, "Put .txt files into /flashcards");
       if (!statusMessage.empty()) {
         const std::string status =
             renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), pageWidth - metrics.contentSidePadding * 2);
-        renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 95, status.c_str());
+        renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 80, status.c_str());
       }
-      const auto labels = mappedInput.mapLabels("Back", "", "", "");
+      char textSizeLine[64];
+      snprintf(textSizeLine, sizeof(textSizeLine), "Card text size: %s", getCardTextSizeLabel());
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 115, textSizeLine);
+      const auto labels = mappedInput.mapLabels("Back", "", "-", "+");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       renderer.displayBuffer();
       return;
@@ -250,27 +265,22 @@ void FlashcardsActivity::render() const {
     const int memorizedCards = countMemorizedCards();
     const int processedInBatch = countProcessedInBatch();
     const int batchSize = static_cast<int>(activeBatch.size());
+    const int totalBatchCards = batchSize > 0 ? batchSize : 0;
 
     char line1[96];
     char line2[96];
     char line3[96];
-    snprintf(line1, sizeof(line1), "Algorithm: SM-2++ (Anki-style)");
-    snprintf(line2, sizeof(line2), "Total cards: %d", static_cast<int>(cards.size()));
-    snprintf(line3, sizeof(line3), "Memorized cards: %d", memorizedCards);
+    snprintf(line1, sizeof(line1), "Memorized cards: %d/%d", memorizedCards, static_cast<int>(cards.size()));
+    snprintf(line2, sizeof(line2), "Active batch: %d/%d", processedInBatch, totalBatchCards);
+    snprintf(line3, sizeof(line3), "Card text size: %s", getCardTextSizeLabel());
 
-    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 45, line1);
-    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 70, line2);
-    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 95, line3);
-
-    if (batchSize > 0) {
-      char batchLine[96];
-      snprintf(batchLine, sizeof(batchLine), "Active batch: %d/%d", processedInBatch, batchSize);
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 120, batchLine);
-    }
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 30, line1);
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 55, line2);
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 80, line3);
 
     renderer.drawCenteredText(UI_12_FONT_ID, contentBottom - 30, "Press Confirm to Learn", true, EpdFontFamily::BOLD);
 
-    const auto labels = mappedInput.mapLabels("Back", "Learn", "", "");
+    const auto labels = mappedInput.mapLabels("Back", "Learn", "-", "+");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
@@ -304,20 +314,21 @@ void FlashcardsActivity::render() const {
   const int textMaxWidth = cardWidth - 40;
   const int textAreaTop = cardY + 50;
   const int textAreaHeight = cardHeight - 80;
-  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int cardTextFontId = getCardTextFontId();
+  const int lineHeight = renderer.getLineHeight(cardTextFontId);
   const int maxLines = std::max(1, textAreaHeight / lineHeight);
-  const auto wrapped = wrapCardText(renderer, cardText, UI_12_FONT_ID, textMaxWidth, maxLines);
+  const auto wrapped = wrapCardText(renderer, cardText, cardTextFontId, textMaxWidth, maxLines);
 
   const int textBlockHeight = static_cast<int>(wrapped.size()) * lineHeight;
   int y = textAreaTop + std::max(0, (textAreaHeight - textBlockHeight) / 2);
   for (const auto& line : wrapped) {
-    renderer.drawCenteredText(UI_12_FONT_ID, y, line.c_str(), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(cardTextFontId, y, line.c_str(), true, EpdFontFamily::BOLD);
     y += lineHeight;
   }
 
   renderer.drawCenteredText(UI_10_FONT_ID, contentBottom - 25, "Up/Down: Flip card");
 
-  const auto labels = mappedInput.mapLabels("Back", "Good", "Hard", "Easy");
+  const auto labels = mappedInput.mapLabels("Back", "Hard", "Good", "Easy");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
@@ -331,7 +342,7 @@ bool FlashcardsActivity::loadProgress() {
 
   uint8_t version = 0;
   serialization::readPod(file, version);
-  if (version != FLASHCARD_PROGRESS_FILE_VERSION) {
+  if (version != FLASHCARD_PROGRESS_FILE_VERSION && version != FLASHCARD_PROGRESS_FILE_VERSION_LEGACY) {
     file.close();
     return false;
   }
@@ -397,6 +408,13 @@ bool FlashcardsActivity::loadProgress() {
     activeBatch.push_back(batchCard);
   }
 
+  if (version >= FLASHCARD_PROGRESS_FILE_VERSION) {
+    serialization::readPod(file, cardTextSize);
+  } else {
+    cardTextSize = CARD_TEXT_SIZE_MEDIUM;
+  }
+  cardTextSize = static_cast<uint8_t>(clampValue<int>(cardTextSize, CARD_TEXT_SIZE_SMALL, CARD_TEXT_SIZE_LARGE));
+
   file.close();
   return true;
 }
@@ -437,6 +455,7 @@ bool FlashcardsActivity::saveProgress() const {
     serialization::writePod(file, activeBatch[i].key);
     serialization::writePod(file, activeBatch[i].processed);
   }
+  serialization::writePod(file, cardTextSize);
 
   file.close();
   return true;
@@ -780,6 +799,37 @@ void FlashcardsActivity::selectNextCard(const bool includeFutureCards) {
   showingAnswer = false;
 }
 
+void FlashcardsActivity::adjustCardTextSize(const int delta) {
+  const int next = clampValue<int>(static_cast<int>(cardTextSize) + delta, CARD_TEXT_SIZE_SMALL, CARD_TEXT_SIZE_LARGE);
+  if (next == static_cast<int>(cardTextSize)) {
+    return;
+  }
+
+  cardTextSize = static_cast<uint8_t>(next);
+  saveProgress();
+  updateRequired = true;
+}
+
+int FlashcardsActivity::getCardTextFontId() const {
+  if (cardTextSize <= CARD_TEXT_SIZE_SMALL) {
+    return UI_10_FONT_ID;
+  }
+  if (cardTextSize >= CARD_TEXT_SIZE_LARGE) {
+    return NOTOSANS_14_FONT_ID;
+  }
+  return UI_12_FONT_ID;
+}
+
+const char* FlashcardsActivity::getCardTextSizeLabel() const {
+  if (cardTextSize <= CARD_TEXT_SIZE_SMALL) {
+    return "Small";
+  }
+  if (cardTextSize >= CARD_TEXT_SIZE_LARGE) {
+    return "Large";
+  }
+  return "Medium";
+}
+
 void FlashcardsActivity::rateCurrentCard(const Sm2ppRating rating) {
   if (currentCardIndex < 0 || currentCardIndex >= static_cast<int>(cards.size())) {
     return;
@@ -944,7 +994,7 @@ int FlashcardsActivity::countMemorizedCards() const {
 
 bool FlashcardsActivity::isCardMemorized(const FlashcardProgress& progress) const {
   const auto phase = static_cast<Sm2ppPhase>(progress.sm2ppPhase);
-  return phase == Sm2ppPhase::REVIEW && progress.sm2ppInterval >= SM2PP_MATURE_INTERVAL;
+  return phase == Sm2ppPhase::REVIEW && progress.sm2ppInterval > 0;
 }
 
 std::string FlashcardsActivity::getMemorizationInfo(const FlashcardProgress& progress) const {

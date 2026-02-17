@@ -15,6 +15,7 @@ class FlashcardsActivity final : public Activity {
   enum class ScreenMode : uint8_t { START = 0, STUDY = 1 };
   enum class Sm2ppPhase : uint8_t { LEARNING = 0, RELEARNING = 1, REVIEW = 2 };
   enum class Sm2ppRating : uint8_t { HARD = 0, GOOD = 1, EASY = 2 };
+  enum class CardTextSize : uint8_t { SMALL = 0, MEDIUM = 1, LARGE = 2 };
 
   struct Flashcard {
     uint32_t key = 0;
@@ -60,6 +61,7 @@ class FlashcardsActivity final : public Activity {
 
   int currentCardIndex = -1;
   bool showingAnswer = false;
+  uint8_t cardTextSize = static_cast<uint8_t>(CardTextSize::MEDIUM);
 
   std::string statusMessage;
 
@@ -88,6 +90,9 @@ class FlashcardsActivity final : public Activity {
   uint32_t getDueStep(const FlashcardProgress& progress) const;
   int findNextCardIndex(bool includeFutureCards) const;
   void selectNextCard(bool includeFutureCards);
+  void adjustCardTextSize(int delta);
+  int getCardTextFontId() const;
+  const char* getCardTextSizeLabel() const;
 
   void rateCurrentCard(Sm2ppRating rating);
   void applySm2pp(FlashcardProgress& progress, Sm2ppRating rating);

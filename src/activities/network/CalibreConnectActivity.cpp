@@ -2,13 +2,13 @@
 
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
-#include <WiFi.h>
 #include <esp_task_wdt.h>
 
 #include "MappedInputManager.h"
 #include "WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 namespace {
 constexpr const char* HOSTNAME = "crosspoint";
@@ -42,12 +42,12 @@ void CalibreConnectActivity::onEnter() {
               &displayTaskHandle  // Task handle
   );
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!WifiPower::hasConnection()) {
     enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
                                                [this](const bool connected) { onWifiSelectionComplete(connected); }));
   } else {
-    connectedIP = WiFi.localIP().toString().c_str();
-    connectedSSID = WiFi.SSID().c_str();
+    connectedIP = WifiPower::currentIp();
+    connectedSSID = WifiPower::currentSsid();
     startWebServer();
   }
 }
@@ -59,10 +59,7 @@ void CalibreConnectActivity::onExit() {
   MDNS.end();
 
   delay(50);
-  WiFi.disconnect(false);
-  delay(30);
-  WiFi.mode(WIFI_OFF);
-  delay(30);
+  Serial.printf("[%lu] [CAL] Leaving station WiFi connected after Calibre transfer\n", millis());
 
   xSemaphoreTake(renderingMutex, portMAX_DELAY);
   if (displayTaskHandle) {
@@ -83,9 +80,9 @@ void CalibreConnectActivity::onWifiSelectionComplete(const bool connected) {
   if (subActivity) {
     connectedIP = static_cast<WifiSelectionActivity*>(subActivity.get())->getConnectedIP();
   } else {
-    connectedIP = WiFi.localIP().toString().c_str();
+    connectedIP = WifiPower::currentIp();
   }
-  connectedSSID = WiFi.SSID().c_str();
+  connectedSSID = WifiPower::currentSsid();
   exitActivity();
   startWebServer();
 }

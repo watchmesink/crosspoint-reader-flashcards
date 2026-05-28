@@ -78,7 +78,7 @@ See [Reading Mode](#4-reading-mode) below for more information.
 
 ### 3.4 File Upload Screen
 
-The File Upload screen allows you to upload new e-books to the device. When you enter the screen, you'll be prompted with a WiFi selection dialog and then your X4 will start hosting a web server.
+The File Upload screen allows you to upload new e-books to the device. If WiFi is already connected, your X4 reuses that connection and starts hosting a web server. Otherwise, it opens the saved-network connection flow first.
 
 See the [webserver docs](./docs/webserver.md) for more information on how to connect to the web server and upload files.
 
@@ -93,7 +93,7 @@ CrossPoint supports sending books from Calibre using the CrossPoint Reader devic
    - Head to https://github.com/crosspoint-reader/calibre-plugins/releases to download the latest version of the crosspoint_reader plugin.
    - Download the zip file.
    - Open Calibre → Preferences → Plugins → Load plugin from file → Select the zip file.
-2. On the device: File Transfer → Connect to Calibre → Join a network.
+2. On the device: File Transfer → Connect to Calibre. If WiFi is not connected, choose a saved or nearby network when prompted.
 3. Make sure your computer is on the same WiFi network.
 4. In Calibre, click "Send to device" to transfer books.
 

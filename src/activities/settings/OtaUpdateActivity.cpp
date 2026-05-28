@@ -1,13 +1,13 @@
 #include "OtaUpdateActivity.h"
 
 #include <GfxRenderer.h>
-#include <WiFi.h>
 
 #include "MappedInputManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/OtaUpdater.h"
+#include "network/WifiPower.h"
 
 void OtaUpdateActivity::taskTrampoline(void* param) {
   auto* self = static_cast<OtaUpdateActivity*>(param);
@@ -67,9 +67,12 @@ void OtaUpdateActivity::onEnter() {
               &displayTaskHandle  // Task handle
   );
 
-  // Turn on WiFi immediately
-  Serial.printf("[%lu] [OTA] Turning on WiFi...\n", millis());
-  WiFi.mode(WIFI_STA);
+  WifiPower::enableStation();
+  if (WifiPower::hasConnection()) {
+    Serial.printf("[%lu] [OTA] Reusing active WiFi connection\n", millis());
+    onWifiSelectionComplete(true);
+    return;
+  }
 
   // Launch WiFi selection subactivity
   Serial.printf("[%lu] [OTA] Launching WifiSelectionActivity...\n", millis());
@@ -80,11 +83,7 @@ void OtaUpdateActivity::onEnter() {
 void OtaUpdateActivity::onExit() {
   ActivityWithSubactivity::onExit();
 
-  // Turn off wifi
-  WiFi.disconnect(false);  // false = don't erase credentials, send disconnect frame
-  delay(100);              // Allow disconnect frame to be sent
-  WiFi.mode(WIFI_OFF);
-  delay(100);  // Allow WiFi hardware to fully power down
+  Serial.printf("[%lu] [OTA] Leaving station WiFi connected after update screen\n", millis());
 
   // Wait until not rendering to delete task to avoid killing mid-instruction to EPD
   xSemaphoreTake(renderingMutex, portMAX_DELAY);

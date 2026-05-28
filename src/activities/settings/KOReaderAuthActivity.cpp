@@ -1,7 +1,6 @@
 #include "KOReaderAuthActivity.h"
 
 #include <GfxRenderer.h>
-#include <WiFi.h>
 
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncClient.h"
@@ -9,6 +8,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 void KOReaderAuthActivity::taskTrampoline(void* param) {
   auto* self = static_cast<KOReaderAuthActivity*>(param);
@@ -64,10 +64,10 @@ void KOReaderAuthActivity::onEnter() {
   );
 
   // Turn on WiFi
-  WiFi.mode(WIFI_STA);
+  WifiPower::enableStation();
 
   // Check if already connected
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WifiPower::hasConnection()) {
     state = AUTHENTICATING;
     statusMessage = "Authenticating...";
     updateRequired = true;
@@ -91,11 +91,7 @@ void KOReaderAuthActivity::onEnter() {
 void KOReaderAuthActivity::onExit() {
   ActivityWithSubactivity::onExit();
 
-  // Turn off wifi
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
+  Serial.printf("[%lu] [KOAuth] Leaving station WiFi connected after authentication\n", millis());
 
   xSemaphoreTake(renderingMutex, portMAX_DELAY);
   if (displayTaskHandle) {

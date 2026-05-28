@@ -4,7 +4,6 @@
 #include <GfxRenderer.h>
 #include <HardwareSerial.h>
 #include <OpdsStream.h>
-#include <WiFi.h>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -12,6 +11,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "network/WifiPower.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
 
@@ -51,8 +51,7 @@ void OpdsBookBrowserActivity::onEnter() {
 void OpdsBookBrowserActivity::onExit() {
   ActivityWithSubactivity::onExit();
 
-  // Turn off WiFi when exiting
-  WiFi.mode(WIFI_OFF);
+  Serial.printf("[%lu] [OPDS] Leaving station WiFi connected after browser exit\n", millis());
 
   xSemaphoreTake(renderingMutex, portMAX_DELAY);
   if (displayTaskHandle) {
@@ -76,7 +75,7 @@ void OpdsBookBrowserActivity::loop() {
   if (state == BrowserState::ERROR) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       // Check if WiFi is still connected
-      if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+      if (WifiPower::hasConnection()) {
         // WiFi connected - just retry fetching the feed
         Serial.printf("[%lu] [OPDS] Retry: WiFi connected, retrying fetch\n", millis());
         state = BrowserState::LOADING;
@@ -379,7 +378,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
 void OpdsBookBrowserActivity::checkAndConnectWifi() {
   // Already connected? Verify connection is valid by checking IP
-  if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+  if (WifiPower::hasConnection()) {
     state = BrowserState::LOADING;
     statusMessage = "Loading...";
     updateRequired = true;
@@ -410,10 +409,6 @@ void OpdsBookBrowserActivity::onWifiSelectionComplete(const bool connected) {
     fetchFeed(currentPath);
   } else {
     Serial.printf("[%lu] [OPDS] WiFi selection cancelled/failed\n", millis());
-    // Force disconnect to ensure clean state for next retry
-    // This prevents stale connection status from interfering
-    WiFi.disconnect();
-    WiFi.mode(WIFI_OFF);
     state = BrowserState::ERROR;
     errorMessage = "WiFi connection failed";
     updateRequired = true;

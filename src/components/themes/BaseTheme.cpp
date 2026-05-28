@@ -11,10 +11,13 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 // Internal constants
 namespace {
 constexpr int batteryPercentSpacing = 4;
+constexpr int wifiIconWidth = 14;
+constexpr int wifiIconSpacing = 6;
 constexpr int homeMenuMargin = 20;
 constexpr int homeMarginTop = 30;
 }  // namespace
@@ -52,6 +55,26 @@ void BaseTheme::drawBattery(const GfxRenderer& renderer, Rect rect, const bool s
   }
 
   renderer.fillRect(x + 2, y + 2, filledWidth, rect.height - 4);
+}
+
+void BaseTheme::drawWifiIcon(const GfxRenderer& renderer, const int x, const int y, const bool black) const {
+  // Outer signal arc
+  renderer.drawLine(x, y + 3, x + 2, y + 1, black);
+  renderer.drawLine(x + 2, y + 1, x + 5, y, black);
+  renderer.drawLine(x + 5, y, x + 8, y, black);
+  renderer.drawLine(x + 8, y, x + 11, y + 1, black);
+  renderer.drawLine(x + 11, y + 1, x + 13, y + 3, black);
+
+  // Middle signal arc
+  renderer.drawLine(x + 3, y + 6, x + 5, y + 4, black);
+  renderer.drawLine(x + 5, y + 4, x + 8, y + 4, black);
+  renderer.drawLine(x + 8, y + 4, x + 10, y + 6, black);
+
+  // Inner signal arc and dot
+  renderer.drawLine(x + 5, y + 9, x + 6, y + 8, black);
+  renderer.drawLine(x + 6, y + 8, x + 7, y + 8, black);
+  renderer.drawLine(x + 7, y + 8, x + 8, y + 9, black);
+  renderer.fillRect(x + 6, y + 11, 2, 2, black);
 }
 
 void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const size_t current,
@@ -236,11 +259,17 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     const auto percentageText = std::to_string(percentage) + "%";
     batteryX -= renderer.getTextWidth(SMALL_FONT_ID, percentageText.c_str());
   }
+  const bool showWifi = WifiPower::hasConnection();
+  int statusStartX = batteryX;
+  if (showWifi) {
+    statusStartX -= wifiIconWidth + wifiIconSpacing;
+    drawWifiIcon(renderer, statusStartX, rect.y + 8);
+  }
   drawBattery(renderer, Rect{batteryX, rect.y + 5, BaseMetrics::values.batteryWidth, BaseMetrics::values.batteryHeight},
               showBatteryPercentage);
 
   if (title) {
-    int padding = rect.width - batteryX;
+    int padding = rect.width - statusStartX;
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title,
                                                  rect.width - padding * 2 - BaseMetrics::values.contentSidePadding * 2,
                                                  EpdFontFamily::BOLD);

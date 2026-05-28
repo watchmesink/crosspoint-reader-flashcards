@@ -13,22 +13,22 @@
 
 // Web server activity states
 enum class WebServerActivityState {
-  MODE_SELECTION,  // Choosing between Join Network and Create Hotspot
-  WIFI_SELECTION,  // WiFi selection subactivity is active (for Join Network mode)
+  MODE_SELECTION,  // Choosing file transfer or WiFi actions
+  WIFI_SELECTION,  // WiFi selection subactivity is active
   AP_STARTING,     // Starting Access Point mode
   SERVER_RUNNING,  // Web server is running and handling requests
-  SHUTTING_DOWN    // Shutting down server and WiFi
+  SHUTTING_DOWN    // Shutting down server-owned services
 };
 
 /**
  * CrossPointWebServerActivity is the entry point for file transfer functionality.
  * It:
- * - First presents a choice between "Join a Network" (STA), "Connect to Calibre", and "Create Hotspot" (AP)
- * - For STA mode: Launches WifiSelectionActivity to connect to an existing network
+ * - Presents file transfer and WiFi power/connection actions
+ * - For web upload: Uses the active WiFi connection or launches WifiSelectionActivity
  * - For AP mode: Creates an Access Point that clients can connect to
  * - Starts the CrossPointWebServer when connected
  * - Handles client requests in its loop() function
- * - Cleans up the server and shuts down WiFi on exit
+ * - Cleans up the server on exit while leaving station WiFi connected
  */
 class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   TaskHandle_t displayTaskHandle = nullptr;
@@ -38,8 +38,10 @@ class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   const std::function<void()> onGoBack;
 
   // Network mode
-  NetworkMode networkMode = NetworkMode::JOIN_NETWORK;
+  NetworkMode networkMode = NetworkMode::WEB_UPLOAD;
   bool isApMode = false;
+  bool staWasActiveBeforeAp = false;
+  bool startWebUploadAfterWifiSelection = true;
 
   // Web server - owned by this activity
   std::unique_ptr<CrossPointWebServer> webServer;
@@ -56,6 +58,7 @@ class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   void render() const;
   void renderServerRunning() const;
 
+  void showModeSelection();
   void onNetworkModeSelected(NetworkMode mode);
   void onWifiSelectionComplete(bool connected);
   void startAccessPoint();

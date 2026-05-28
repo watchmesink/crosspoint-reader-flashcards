@@ -4,16 +4,20 @@
 #include <freertos/task.h>
 
 #include <functional>
+#include <string>
+#include <vector>
 
 #include "../Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Enum for network mode selection
-enum class NetworkMode { JOIN_NETWORK, CONNECT_CALIBRE, CREATE_HOTSPOT };
+// Enum for file transfer and network actions
+enum class NetworkMode { WEB_UPLOAD, CONNECT_WIFI, DISABLE_WIFI, CONNECT_CALIBRE, CREATE_HOTSPOT };
 
 /**
- * NetworkModeSelectionActivity presents the user with a choice:
- * - "Join a Network" - Connect to an existing WiFi network (STA mode)
+ * NetworkModeSelectionActivity presents file transfer and WiFi actions:
+ * - "Web Upload" - Start browser-based transfer over station WiFi
+ * - "Connect WiFi" - Turn on WiFi and connect to a saved or new network
+ * - "Disable WiFi" - Turn WiFi off when it is no longer needed
  * - "Connect to Calibre" - Use Calibre wireless device transfers
  * - "Create Hotspot" - Create an Access Point that others can connect to (AP mode)
  *
@@ -33,6 +37,11 @@ class NetworkModeSelectionActivity final : public Activity {
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
   void render() const;
+  std::vector<NetworkMode> getMenuModes() const;
+  NetworkMode modeAtIndex(int index) const;
+  std::string getModeLabel(NetworkMode mode) const;
+  std::string getModeDescription(NetworkMode mode) const;
+  std::string getWifiStatusText() const;
 
  public:
   explicit NetworkModeSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

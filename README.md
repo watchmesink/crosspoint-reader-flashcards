@@ -51,12 +51,12 @@ For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) do
 
 WiFi behaves like a device-level connection rather than a per-feature mode:
 
-1. Enable WiFi from **Settings → Network**.
-2. Open the network list and connect to an available network.
+1. Open **File Transfer** from the home screen.
+2. Choose **Enable & Connect WiFi** and connect to an available network.
 3. Successful connections are saved automatically.
 4. Switch to other features while WiFi stays connected.
-5. Disable WiFi from **Settings → Network** when you want to save battery.
-6. Re-enable WiFi later to reconnect to the saved network.
+5. Return to **File Transfer** and choose **Disable WiFi** when you want to save battery.
+6. Choose **Connect WiFi** later to reconnect to the saved network.
 
 ## Installing
 

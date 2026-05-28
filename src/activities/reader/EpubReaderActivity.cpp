@@ -15,6 +15,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
@@ -774,6 +775,9 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
   if (showBattery) {
     GUI.drawBattery(renderer, Rect{orientedMarginLeft + 1, textY, metrics.batteryWidth, metrics.batteryHeight},
                     showBatteryPercentage);
+    if (WifiPower::hasConnection()) {
+      GUI.drawWifiIcon(renderer, orientedMarginLeft + (showBatteryPercentage ? 53 : 24), textY + 6);
+    }
   }
 
   if (showChapterTitle) {
@@ -781,7 +785,10 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
     // Page width minus existing content with 30px padding on each side
     const int rendererableScreenWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
 
-    const int batterySize = showBattery ? (showBatteryPercentage ? 50 : 20) : 0;
+    int batterySize = showBattery ? (showBatteryPercentage ? 50 : 20) : 0;
+    if (showBattery && WifiPower::hasConnection()) {
+      batterySize += 20;
+    }
     const int titleMarginLeft = batterySize + 30;
     const int titleMarginRight = progressTextWidth + 30;
 

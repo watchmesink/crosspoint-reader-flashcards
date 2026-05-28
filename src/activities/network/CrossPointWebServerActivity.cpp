@@ -9,6 +9,7 @@
 
 #include <cstddef>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
 #include "WifiSelectionActivity.h"
@@ -44,9 +45,10 @@ void CrossPointWebServerActivity::onEnter() {
 
   // Reset state
   state = WebServerActivityState::MODE_SELECTION;
-  networkMode = NetworkMode::JOIN_NETWORK;
+  networkMode = NetworkMode::WEB_UPLOAD;
   isApMode = false;
   staWasActiveBeforeAp = false;
+  startWebUploadAfterWifiSelection = true;
   connectedIP.clear();
   connectedSSID.clear();
   lastHandleClientTime = 0;
@@ -59,12 +61,7 @@ void CrossPointWebServerActivity::onEnter() {
               &displayTaskHandle  // Task handle
   );
 
-  // Launch network mode selection subactivity
-  Serial.printf("[%lu] [WEBACT] Launching NetworkModeSelectionActivity...\n", millis());
-  enterNewActivity(new NetworkModeSelectionActivity(
-      renderer, mappedInput, [this](const NetworkMode mode) { onNetworkModeSelected(mode); },
-      [this]() { onGoBack(); }  // Cancel goes back to home
-      ));
+  showModeSelection();
 }
 
 void CrossPointWebServerActivity::onExit() {
@@ -130,14 +127,18 @@ void CrossPointWebServerActivity::onExit() {
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap at onExit end: %d bytes\n", millis(), ESP.getFreeHeap());
 }
 
+void CrossPointWebServerActivity::showModeSelection() {
+  state = WebServerActivityState::MODE_SELECTION;
+  updateRequired = true;
+  Serial.printf("[%lu] [WEBACT] Launching NetworkModeSelectionActivity...\n", millis());
+  enterNewActivity(new NetworkModeSelectionActivity(
+      renderer, mappedInput, [this](const NetworkMode mode) { onNetworkModeSelected(mode); },
+      [this]() { onGoBack(); }  // Cancel goes back to home
+      ));
+}
+
 void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
-  const char* modeName = "Join Network";
-  if (mode == NetworkMode::CONNECT_CALIBRE) {
-    modeName = "Connect to Calibre";
-  } else if (mode == NetworkMode::CREATE_HOTSPOT) {
-    modeName = "Create Hotspot";
-  }
-  Serial.printf("[%lu] [WEBACT] Network mode selected: %s\n", millis(), modeName);
+  Serial.printf("[%lu] [WEBACT] Network mode selected: %d\n", millis(), static_cast<int>(mode));
 
   networkMode = mode;
   isApMode = (mode == NetworkMode::CREATE_HOTSPOT);
@@ -146,18 +147,35 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   exitActivity();
 
   if (mode == NetworkMode::CONNECT_CALIBRE) {
-    exitActivity();
     enterNewActivity(new CalibreConnectActivity(renderer, mappedInput, [this] {
       exitActivity();
-      state = WebServerActivityState::MODE_SELECTION;
-      enterNewActivity(new NetworkModeSelectionActivity(
-          renderer, mappedInput, [this](const NetworkMode nextMode) { onNetworkModeSelected(nextMode); },
-          [this]() { onGoBack(); }));
+      showModeSelection();
     }));
     return;
   }
 
-  if (mode == NetworkMode::JOIN_NETWORK) {
+  if (mode == NetworkMode::CONNECT_WIFI) {
+    WifiPower::enableStation();
+    SETTINGS.wifiEnabled = 1;
+    SETTINGS.saveToFile();
+    startWebUploadAfterWifiSelection = false;
+    state = WebServerActivityState::WIFI_SELECTION;
+    Serial.printf("[%lu] [WEBACT] Launching WifiSelectionActivity for WiFi control...\n", millis());
+    enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
+                                               [this](const bool connected) { onWifiSelectionComplete(connected); },
+                                               !WifiPower::hasConnection()));
+    return;
+  }
+
+  if (mode == NetworkMode::DISABLE_WIFI) {
+    WifiPower::disable();
+    SETTINGS.wifiEnabled = 0;
+    SETTINGS.saveToFile();
+    showModeSelection();
+    return;
+  }
+
+  if (mode == NetworkMode::WEB_UPLOAD) {
     if (WifiPower::hasConnection()) {
       connectedIP = WifiPower::currentIp();
       connectedSSID = WifiPower::currentSsid();
@@ -171,6 +189,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
       return;
     }
 
+    startWebUploadAfterWifiSelection = true;
     state = WebServerActivityState::WIFI_SELECTION;
     Serial.printf("[%lu] [WEBACT] Launching WifiSelectionActivity...\n", millis());
     enterNewActivity(new WifiSelectionActivity(renderer, mappedInput,
@@ -186,7 +205,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
 void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) {
   Serial.printf("[%lu] [WEBACT] WifiSelectionActivity completed, connected=%d\n", millis(), connected);
 
-  if (connected) {
+  if (connected && startWebUploadAfterWifiSelection) {
     // Get connection info before exiting subactivity
     connectedIP = static_cast<WifiSelectionActivity*>(subActivity.get())->getConnectedIP();
     connectedSSID = WiFi.SSID().c_str();
@@ -202,12 +221,9 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
     // Start the web server
     startWebServer();
   } else {
-    // User cancelled - go back to mode selection
+    // User cancelled, failed, or only changed the WiFi connection.
     exitActivity();
-    state = WebServerActivityState::MODE_SELECTION;
-    enterNewActivity(new NetworkModeSelectionActivity(
-        renderer, mappedInput, [this](const NetworkMode mode) { onNetworkModeSelected(mode); },
-        [this]() { onGoBack(); }));
+    showModeSelection();
   }
 }
 
@@ -215,7 +231,7 @@ void CrossPointWebServerActivity::startAccessPoint() {
   Serial.printf("[%lu] [WEBACT] Starting Access Point mode...\n", millis());
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap before AP start: %d bytes\n", millis(), ESP.getFreeHeap());
 
-  staWasActiveBeforeAp = WifiPower::hasConnection();
+  staWasActiveBeforeAp = WifiPower::isStationEnabled();
 
   // Configure and start the AP
   WiFi.mode(staWasActiveBeforeAp ? WIFI_AP_STA : WIFI_AP);

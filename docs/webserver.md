@@ -19,11 +19,11 @@ CrossPoint Reader includes a built-in web server that allows you to:
 
 ---
 
-## Step 1: Accessing Network Settings
+## Step 1: Accessing File Transfer
 
-1. From the main menu or file browser, navigate to the **Settings** screen
-2. Select the **Network** option
-3. Press **Enable** or **Connect** to turn WiFi on and open the network list
+1. From the main menu or file browser, open **File Transfer**
+2. Select **Enable & Connect WiFi** or **Connect WiFi**
+3. The device will turn WiFi on and open the network list
 
 ---
 
@@ -70,7 +70,9 @@ If WiFi is left enabled, the reader will try the last saved network again on sta
 
 ## Step 3: Connection Success
 
-Once connected, the screen will display:
+Once connected, File Transfer will show the current WiFi network. Select **Web Upload** to start the web server.
+
+When Web Upload starts, the screen will display:
 
 - **Network name** (SSID)
 - **IP Address** (e.g., `192.168.1.102`)
@@ -199,18 +201,18 @@ For power users, you can manage files directly from your terminal using `curl` w
 3. **Upload multiple files** - You can upload files one at a time; the page refreshes after each upload
 4. **Use descriptive names** - Name your folders clearly (e.g., "SciFi", "Mystery", "Non-Fiction")
 5. **Reuse saved networks** - Once a network has connected successfully, the device can reconnect without re-entering the password
-6. **Turn WiFi off when done** - Use Settings → Network → Disable when you want to save battery
+6. **Turn WiFi off when done** - Use File Transfer → Disable WiFi when you want to save battery
 
 ---
 
-## Exiting WiFi Mode
+## Exiting File Transfer
 
 When you're finished uploading files:
 
 1. Press the **Back** button on your CrossPoint Reader
 2. The web server will automatically stop
 3. WiFi remains connected for other network features
-4. To disconnect, go to **Settings → Network → Disable**
+4. To disconnect, go to **File Transfer → Disable WiFi**
 
 Your uploaded files will be immediately available in the file browser!
 

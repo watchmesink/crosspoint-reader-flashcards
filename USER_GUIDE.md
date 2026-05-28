@@ -93,7 +93,7 @@ CrossPoint supports sending books from Calibre using the CrossPoint Reader devic
    - Head to https://github.com/crosspoint-reader/calibre-plugins/releases to download the latest version of the crosspoint_reader plugin.
    - Download the zip file.
    - Open Calibre → Preferences → Plugins → Load plugin from file → Select the zip file.
-2. On the device: File Transfer → Connect to Calibre → Join a network.
+2. On the device: File Transfer → Connect to Calibre. If WiFi is not connected, choose a saved or nearby network when prompted.
 3. Make sure your computer is on the same WiFi network.
 4. In Calibre, click "Send to device" to transfer books.
 

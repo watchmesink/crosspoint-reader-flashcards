@@ -1,7 +1,6 @@
 #include "KOReaderSyncActivity.h"
 
 #include <GfxRenderer.h>
-#include <WiFi.h>
 #include <esp_sntp.h>
 
 #include "KOReaderCredentialStore.h"
@@ -10,6 +9,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 namespace {
 void syncTimeWithNTP() {
@@ -189,10 +189,10 @@ void KOReaderSyncActivity::onEnter() {
 
   // Turn on WiFi
   Serial.printf("[%lu] [KOSync] Turning on WiFi...\n", millis());
-  WiFi.mode(WIFI_STA);
+  WifiPower::enableStation();
 
   // Check if already connected
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WifiPower::hasConnection()) {
     Serial.printf("[%lu] [KOSync] Already connected to WiFi\n", millis());
     state = SYNCING;
     statusMessage = "Syncing time...";
@@ -224,11 +224,7 @@ void KOReaderSyncActivity::onEnter() {
 void KOReaderSyncActivity::onExit() {
   ActivityWithSubactivity::onExit();
 
-  // Turn off wifi
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
+  Serial.printf("[%lu] [KOSync] Leaving station WiFi connected after sync\n", millis());
 
   // Wait until not rendering to delete task
   xSemaphoreTake(renderingMutex, portMAX_DELAY);

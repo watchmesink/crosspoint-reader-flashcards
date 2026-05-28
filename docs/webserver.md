@@ -19,11 +19,11 @@ CrossPoint Reader includes a built-in web server that allows you to:
 
 ---
 
-## Step 1: Accessing the WiFi Screen
+## Step 1: Accessing Network Settings
 
 1. From the main menu or file browser, navigate to the **Settings** screen
-2. Select the **WiFi** option
-3. The device will automatically start scanning for available networks
+2. Select the **Network** option
+3. Press **Enable** or **Connect** to turn WiFi on and open the network list
 
 ---
 
@@ -63,10 +63,8 @@ The device will display "Connecting..." while establishing the connection. This 
 
 ### Saving Credentials
 
-If this is a new network, you'll be prompted to save the password:
-
-- Select **Yes** to save credentials for automatic connection next time (NOTE: These are stored in plaintext on the device's SD card. Do not use this for sensitive networks.)
-- Select **No** to connect without saving
+Successful connections are saved automatically for quicker reconnection later. Credentials are stored on the device SD card with basic obfuscation, not strong encryption, so only save trusted networks.
+If WiFi is left enabled, the reader will try the last saved network again on startup.
 
 ---
 
@@ -178,8 +176,8 @@ For power users, you can manage files directly from your terminal using `curl` w
 
 - The web server runs on port 80 (standard HTTP)
 - **No authentication is required** - anyone on the same network can access the interface
-- The web server is only accessible while the WiFi screen shows "Connected"
-- The web server automatically stops when you exit the WiFi screen
+- The web server is only accessible while the File Transfer screen is open
+- The web server automatically stops when you exit File Transfer
 - For security, only use on trusted private networks
 
 ---
@@ -200,8 +198,8 @@ For power users, you can manage files directly from your terminal using `curl` w
 2. **Check signal strength** - Stronger signals (`|||` or `||||`) provide faster, more reliable uploads
 3. **Upload multiple files** - You can upload files one at a time; the page refreshes after each upload
 4. **Use descriptive names** - Name your folders clearly (e.g., "SciFi", "Mystery", "Non-Fiction")
-5. **Keep credentials saved** - Save your WiFi password for quick reconnection in the future
-6. **Exit when done** - Press **Back** to exit the WiFi screen and save battery
+5. **Reuse saved networks** - Once a network has connected successfully, the device can reconnect without re-entering the password
+6. **Turn WiFi off when done** - Use Settings → Network → Disable when you want to save battery
 
 ---
 
@@ -211,8 +209,8 @@ When you're finished uploading files:
 
 1. Press the **Back** button on your CrossPoint Reader
 2. The web server will automatically stop
-3. WiFi will disconnect to conserve battery
-4. You'll return to the previous screen
+3. WiFi remains connected for other network features
+4. To disconnect, go to **Settings → Network → Disable**
 
 Your uploaded files will be immediately available in the file browser!
 

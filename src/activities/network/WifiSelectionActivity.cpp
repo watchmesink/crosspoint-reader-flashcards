@@ -3,13 +3,16 @@
 #include <GfxRenderer.h>
 #include <WiFi.h>
 
+#include <algorithm>
 #include <map>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 void WifiSelectionActivity::taskTrampoline(void* param) {
   auto* self = static_cast<WifiSelectionActivity*>(param);
@@ -36,9 +39,10 @@ void WifiSelectionActivity::onEnter() {
   connectionError.clear();
   enteredPassword.clear();
   usedSavedPassword = false;
-  savePromptSelection = 0;
   forgetPromptSelection = 0;
   autoConnecting = false;
+
+  WifiPower::enableStation();
 
   // Cache MAC address for display
   uint8_t mac[6];
@@ -122,12 +126,10 @@ void WifiSelectionActivity::startWifiScan() {
   networks.clear();
   updateRequired = true;
 
-  // Set WiFi mode to station
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
+  WifiPower::enableStation();
 
   // Start async scan
+  WiFi.scanDelete();
   WiFi.scanNetworks(true);  // true = async scan
 }
 
@@ -207,8 +209,9 @@ void WifiSelectionActivity::selectNetwork(const int index) {
 
   // Check if we have saved credentials for this network
   const auto* savedCred = WIFI_STORE.findCredential(selectedSSID);
-  if (savedCred && !savedCred->password.empty()) {
-    // Use saved password - connect directly
+  if (savedCred) {
+    // Use saved credentials - connect directly. Open networks are saved with
+    // an empty password.
     enteredPassword = savedCred->password;
     usedSavedPassword = true;
     Serial.printf("[%lu] [WiFi] Using saved password for %s, length: %zu\n", millis(), selectedSSID.c_str(),
@@ -252,7 +255,9 @@ void WifiSelectionActivity::attemptConnection() {
   connectionError.clear();
   updateRequired = true;
 
-  WiFi.mode(WIFI_STA);
+  WifiPower::enableStation();
+  WiFi.disconnect(false);
+  delay(100);
 
   if (selectedRequiresPassword && !enteredPassword.empty()) {
     WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
@@ -276,26 +281,20 @@ void WifiSelectionActivity::checkConnectionStatus() {
     connectedIP = ipStr;
     autoConnecting = false;
 
-    // Save this as the last connected network - SD card operations need lock as
-    // we use SPI for both
+    // Save successful connections automatically, matching phone WiFi behavior.
+    // SD card operations need the rendering lock because display and storage
+    // share SPI.
     xSemaphoreTake(renderingMutex, portMAX_DELAY);
+    if (!usedSavedPassword || !WIFI_STORE.hasSavedCredential(selectedSSID)) {
+      WIFI_STORE.addCredential(selectedSSID, enteredPassword);
+    }
     WIFI_STORE.setLastConnectedSsid(selectedSSID);
+    SETTINGS.wifiEnabled = 1;
+    SETTINGS.saveToFile();
     xSemaphoreGive(renderingMutex);
 
-    // If we entered a new password, ask if user wants to save it
-    // Otherwise, immediately complete so parent can start web server
-    if (!usedSavedPassword && !enteredPassword.empty()) {
-      state = WifiSelectionState::SAVE_PROMPT;
-      savePromptSelection = 0;  // Default to "Yes"
-      updateRequired = true;
-    } else {
-      // Using saved password or open network - complete immediately
-      Serial.printf(
-          "[%lu] [WIFI] Connected with saved/open credentials, "
-          "completing immediately\n",
-          millis());
-      onComplete(true);
-    }
+    Serial.printf("[%lu] [WIFI] Connected and saved network, completing immediately\n", millis());
+    onComplete(true);
     return;
   }
 
@@ -311,7 +310,7 @@ void WifiSelectionActivity::checkConnectionStatus() {
 
   // Check for timeout
   if (millis() - connectionStartTime > CONNECTION_TIMEOUT_MS) {
-    WiFi.disconnect();
+    WiFi.disconnect(false);
     connectionError = "Error: Connection timeout";
     state = WifiSelectionState::CONNECTION_FAILED;
     updateRequired = true;
@@ -340,36 +339,6 @@ void WifiSelectionActivity::loop() {
   if (state == WifiSelectionState::PASSWORD_ENTRY) {
     // Reach here once password entry finished in subactivity
     attemptConnection();
-    return;
-  }
-
-  // Handle save prompt state
-  if (state == WifiSelectionState::SAVE_PROMPT) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
-        mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-      if (savePromptSelection > 0) {
-        savePromptSelection--;
-        updateRequired = true;
-      }
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) ||
-               mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-      if (savePromptSelection < 1) {
-        savePromptSelection++;
-        updateRequired = true;
-      }
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      if (savePromptSelection == 0) {
-        // User chose "Yes" - save the password
-        xSemaphoreTake(renderingMutex, portMAX_DELAY);
-        WIFI_STORE.addCredential(selectedSSID, enteredPassword);
-        xSemaphoreGive(renderingMutex);
-      }
-      // Complete - parent will start web server
-      onComplete(true);
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-      // Skip saving, complete anyway
-      onComplete(true);
-    }
     return;
   }
 
@@ -545,9 +514,6 @@ void WifiSelectionActivity::render() const {
     case WifiSelectionState::CONNECTED:
       renderConnected();
       break;
-    case WifiSelectionState::SAVE_PROMPT:
-      renderSavePrompt();
-      break;
     case WifiSelectionState::CONNECTION_FAILED:
       renderConnectionFailed();
       break;
@@ -680,48 +646,6 @@ void WifiSelectionActivity::renderConnected() const {
 
   // Use centralized button hints
   const auto labels = mappedInput.mapLabels("", "Continue", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-}
-
-void WifiSelectionActivity::renderSavePrompt() const {
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-  const auto top = (pageHeight - height * 3) / 2;
-
-  renderer.drawCenteredText(UI_12_FONT_ID, top - 40, "Connected!", true, EpdFontFamily::BOLD);
-
-  std::string ssidInfo = "Network: " + selectedSSID;
-  if (ssidInfo.length() > 28) {
-    ssidInfo.replace(25, ssidInfo.length() - 25, "...");
-  }
-  renderer.drawCenteredText(UI_10_FONT_ID, top, ssidInfo.c_str());
-
-  renderer.drawCenteredText(UI_10_FONT_ID, top + 40, "Save password for next time?");
-
-  // Draw Yes/No buttons
-  const int buttonY = top + 80;
-  constexpr int buttonWidth = 60;
-  constexpr int buttonSpacing = 30;
-  constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
-  const int startX = (pageWidth - totalWidth) / 2;
-
-  // Draw "Yes" button
-  if (savePromptSelection == 0) {
-    renderer.drawText(UI_10_FONT_ID, startX, buttonY, "[Yes]");
-  } else {
-    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, "Yes");
-  }
-
-  // Draw "No" button
-  if (savePromptSelection == 1) {
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, "[No]");
-  } else {
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, "No");
-  }
-
-  // Use centralized button hints
-  const auto labels = mappedInput.mapLabels("« Skip", "Select", "Left", "Right");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

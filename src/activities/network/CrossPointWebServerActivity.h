@@ -28,7 +28,7 @@ enum class WebServerActivityState {
  * - For AP mode: Creates an Access Point that clients can connect to
  * - Starts the CrossPointWebServer when connected
  * - Handles client requests in its loop() function
- * - Cleans up the server and shuts down WiFi on exit
+ * - Cleans up the server on exit while leaving station WiFi connected
  */
 class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   TaskHandle_t displayTaskHandle = nullptr;
@@ -40,6 +40,7 @@ class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   // Network mode
   NetworkMode networkMode = NetworkMode::JOIN_NETWORK;
   bool isApMode = false;
+  bool staWasActiveBeforeAp = false;
 
   // Web server - owned by this activity
   std::unique_ptr<CrossPointWebServer> webServer;

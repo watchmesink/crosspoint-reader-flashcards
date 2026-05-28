@@ -15,6 +15,7 @@
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/WifiPower.h"
 
 namespace {
 // AP Mode configuration
@@ -45,6 +46,7 @@ void CrossPointWebServerActivity::onEnter() {
   state = WebServerActivityState::MODE_SELECTION;
   networkMode = NetworkMode::JOIN_NETWORK;
   isApMode = false;
+  staWasActiveBeforeAp = false;
   connectedIP.clear();
   connectedSSID.clear();
   lastHandleClientTime = 0;
@@ -72,7 +74,8 @@ void CrossPointWebServerActivity::onExit() {
 
   state = WebServerActivityState::SHUTTING_DOWN;
 
-  // Stop the web server first (before disconnecting WiFi)
+  // Stop the web server first, then clean up only the network services this
+  // activity owns.
   stopWebServer();
 
   // Stop mDNS
@@ -89,21 +92,22 @@ void CrossPointWebServerActivity::onExit() {
   // Brief wait for LWIP stack to flush pending packets
   delay(50);
 
-  // Disconnect WiFi gracefully
   if (isApMode) {
     Serial.printf("[%lu] [WEBACT] Stopping WiFi AP...\n", millis());
     WiFi.softAPdisconnect(true);
+    if (staWasActiveBeforeAp) {
+      Serial.printf("[%lu] [WEBACT] Keeping station WiFi enabled after AP stop...\n", millis());
+      WifiPower::enableStation();
+    } else {
+      Serial.printf("[%lu] [WEBACT] Setting WiFi mode OFF...\n", millis());
+      WiFi.mode(WIFI_OFF);
+      delay(30);  // Allow WiFi hardware to power down
+    }
   } else {
-    Serial.printf("[%lu] [WEBACT] Disconnecting WiFi (graceful)...\n", millis());
-    WiFi.disconnect(false);  // false = don't erase credentials, send disconnect frame
+    Serial.printf("[%lu] [WEBACT] Leaving station WiFi connected after file transfer\n", millis());
   }
-  delay(30);  // Allow disconnect frame to be sent
 
-  Serial.printf("[%lu] [WEBACT] Setting WiFi mode OFF...\n", millis());
-  WiFi.mode(WIFI_OFF);
-  delay(30);  // Allow WiFi hardware to power down
-
-  Serial.printf("[%lu] [WEBACT] [MEM] Free heap after WiFi disconnect: %d bytes\n", millis(), ESP.getFreeHeap());
+  Serial.printf("[%lu] [WEBACT] [MEM] Free heap after network cleanup: %d bytes\n", millis(), ESP.getFreeHeap());
 
   // Acquire mutex before deleting task
   Serial.printf("[%lu] [WEBACT] Acquiring rendering mutex before task deletion...\n", millis());
@@ -154,9 +158,18 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   }
 
   if (mode == NetworkMode::JOIN_NETWORK) {
-    // STA mode - launch WiFi selection
-    Serial.printf("[%lu] [WEBACT] Turning on WiFi (STA mode)...\n", millis());
-    WiFi.mode(WIFI_STA);
+    if (WifiPower::hasConnection()) {
+      connectedIP = WifiPower::currentIp();
+      connectedSSID = WifiPower::currentSsid();
+      isApMode = false;
+
+      if (MDNS.begin(AP_HOSTNAME)) {
+        Serial.printf("[%lu] [WEBACT] mDNS started: http://%s.local/\n", millis(), AP_HOSTNAME);
+      }
+
+      startWebServer();
+      return;
+    }
 
     state = WebServerActivityState::WIFI_SELECTION;
     Serial.printf("[%lu] [WEBACT] Launching WifiSelectionActivity...\n", millis());
@@ -202,8 +215,10 @@ void CrossPointWebServerActivity::startAccessPoint() {
   Serial.printf("[%lu] [WEBACT] Starting Access Point mode...\n", millis());
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap before AP start: %d bytes\n", millis(), ESP.getFreeHeap());
 
+  staWasActiveBeforeAp = WifiPower::hasConnection();
+
   // Configure and start the AP
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(staWasActiveBeforeAp ? WIFI_AP_STA : WIFI_AP);
   delay(100);
 
   // Start soft AP

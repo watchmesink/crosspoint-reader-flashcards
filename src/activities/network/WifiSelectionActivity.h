@@ -28,7 +28,6 @@ enum class WifiSelectionState {
   PASSWORD_ENTRY,     // Entering password for selected network
   CONNECTING,         // Attempting to connect
   CONNECTED,          // Successfully connected
-  SAVE_PROMPT,        // Asking user if they want to save the password
   CONNECTION_FAILED,  // Connection failed
   FORGET_PROMPT       // Asking user if they want to forget the network
 };
@@ -39,7 +38,7 @@ enum class WifiSelectionState {
  * - Enter scanning mode on entry
  * - List available WiFi networks
  * - Allow selection and launch KeyboardEntryActivity for password if needed
- * - Save the password if requested
+ * - Save successful network credentials automatically
  * - Call onComplete callback when connected or cancelled
  *
  * The onComplete callback receives true if connected successfully, false if cancelled.
@@ -68,7 +67,7 @@ class WifiSelectionActivity final : public ActivityWithSubactivity {
   // Cached MAC address string for display
   std::string cachedMacAddress;
 
-  // Whether network was connected using a saved password (skip save prompt)
+  // Whether network was connected using a saved credential
   bool usedSavedPassword = false;
 
   // Whether to attempt auto-connect on entry
@@ -77,8 +76,7 @@ class WifiSelectionActivity final : public ActivityWithSubactivity {
   // Whether we are attempting to auto-connect
   bool autoConnecting = false;
 
-  // Save/forget prompt selection (0 = Yes, 1 = No)
-  int savePromptSelection = 0;
+  // Forget prompt selection (0 = Cancel, 1 = Forget network)
   int forgetPromptSelection = 0;
 
   // Connection timeout
@@ -92,7 +90,6 @@ class WifiSelectionActivity final : public ActivityWithSubactivity {
   void renderPasswordEntry() const;
   void renderConnecting() const;
   void renderConnected() const;
-  void renderSavePrompt() const;
   void renderConnectionFailed() const;
   void renderForgetPrompt() const;
 

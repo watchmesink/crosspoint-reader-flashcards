@@ -171,6 +171,8 @@ class CrossPointSettings {
   uint8_t fadingFix = 0;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
   uint8_t embeddedStyle = 1;
+  // Device-level WiFi power state (1 = enabled, 0 = disabled)
+  uint8_t wifiEnabled = 0;
   ~CrossPointSettings() = default;
 
   // Get singleton instance

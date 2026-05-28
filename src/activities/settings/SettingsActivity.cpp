@@ -11,7 +11,7 @@
 #include "MappedInputManager.h"
 #include "OtaUpdateActivity.h"
 #include "SettingsList.h"
-#include "activities/network/WifiSelectionActivity.h"
+#include "WifiSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -193,11 +193,6 @@ void SettingsActivity::toggleCurrentSetting() {
       updateRequired = true;
     };
 
-    auto onCompleteBool = [this](bool) {
-      exitActivity();
-      updateRequired = true;
-    };
-
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
         enterSubActivity(new ButtonRemapActivity(renderer, mappedInput, onComplete));
@@ -209,7 +204,7 @@ void SettingsActivity::toggleCurrentSetting() {
         enterSubActivity(new CalibreSettingsActivity(renderer, mappedInput, onComplete));
         break;
       case SettingAction::Network:
-        enterSubActivity(new WifiSelectionActivity(renderer, mappedInput, onCompleteBool, false));
+        enterSubActivity(new WifiSettingsActivity(renderer, mappedInput, onComplete));
         break;
       case SettingAction::ClearCache:
         enterSubActivity(new ClearCacheActivity(renderer, mappedInput, onComplete));

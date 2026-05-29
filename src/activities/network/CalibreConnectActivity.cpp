@@ -1,18 +1,13 @@
 #include "CalibreConnectActivity.h"
 
-#include <ESPmDNS.h>
 #include <GfxRenderer.h>
-#include <esp_task_wdt.h>
 
 #include "MappedInputManager.h"
 #include "WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/NetworkServices.h"
 #include "network/WifiPower.h"
-
-namespace {
-constexpr const char* HOSTNAME = "crosspoint";
-}  // namespace
 
 void CalibreConnectActivity::taskTrampoline(void* param) {
   auto* self = static_cast<CalibreConnectActivity*>(param);
@@ -55,11 +50,8 @@ void CalibreConnectActivity::onEnter() {
 void CalibreConnectActivity::onExit() {
   ActivityWithSubactivity::onExit();
 
-  stopWebServer();
-  MDNS.end();
-
   delay(50);
-  Serial.printf("[%lu] [CAL] Leaving station WiFi connected after Calibre transfer\n", millis());
+  Serial.printf("[%lu] [CAL] Leaving station WiFi and background web server active\n", millis());
 
   xSemaphoreTake(renderingMutex, portMAX_DELAY);
   if (displayTaskHandle) {
@@ -91,27 +83,12 @@ void CalibreConnectActivity::startWebServer() {
   state = CalibreConnectState::SERVER_STARTING;
   updateRequired = true;
 
-  if (MDNS.begin(HOSTNAME)) {
-    // mDNS is optional for the Calibre plugin but still helpful for users.
-    Serial.printf("[%lu] [CAL] mDNS started: http://%s.local/\n", millis(), HOSTNAME);
-  }
-
-  webServer.reset(new CrossPointWebServer());
-  webServer->begin();
-
-  if (webServer->isRunning()) {
+  if (NetworkServices::ensureWebServerRunning()) {
     state = CalibreConnectState::SERVER_RUNNING;
     updateRequired = true;
   } else {
     state = CalibreConnectState::ERROR;
     updateRequired = true;
-  }
-}
-
-void CalibreConnectActivity::stopWebServer() {
-  if (webServer) {
-    webServer->stop();
-    webServer.reset();
   }
 }
 
@@ -125,30 +102,8 @@ void CalibreConnectActivity::loop() {
     exitRequested = true;
   }
 
-  if (webServer && webServer->isRunning()) {
-    const unsigned long timeSinceLastHandleClient = millis() - lastHandleClientTime;
-    if (lastHandleClientTime > 0 && timeSinceLastHandleClient > 100) {
-      Serial.printf("[%lu] [CAL] WARNING: %lu ms gap since last handleClient\n", millis(), timeSinceLastHandleClient);
-    }
-
-    esp_task_wdt_reset();
-    constexpr int MAX_ITERATIONS = 80;
-    for (int i = 0; i < MAX_ITERATIONS && webServer->isRunning(); i++) {
-      webServer->handleClient();
-      if ((i & 0x07) == 0x07) {
-        esp_task_wdt_reset();
-      }
-      if ((i & 0x0F) == 0x0F) {
-        yield();
-        if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-          exitRequested = true;
-          break;
-        }
-      }
-    }
-    lastHandleClientTime = millis();
-
-    const auto status = webServer->getWsUploadStatus();
+  if (NetworkServices::isWebServerRunning()) {
+    const auto status = NetworkServices::webServer()->getWsUploadStatus();
     bool changed = false;
     if (status.inProgress) {
       if (status.received != lastProgressReceived || status.total != lastProgressTotal ||
@@ -270,3 +225,7 @@ void CalibreConnectActivity::renderServerRunning() const {
   const auto labels = mappedInput.mapLabels("« Exit", "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
+
+bool CalibreConnectActivity::skipLoopDelay() { return NetworkServices::isWebServerRunning(); }
+
+bool CalibreConnectActivity::preventAutoSleep() { return NetworkServices::preventAutoSleep(); }

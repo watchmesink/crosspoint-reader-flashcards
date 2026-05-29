@@ -7,17 +7,15 @@
 #include <string>
 #include <vector>
 
+#include "NetworkMenuModel.h"
 #include "../Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Enum for file transfer and network actions
-enum class NetworkMode { WEB_UPLOAD, CONNECT_WIFI, DISABLE_WIFI, CONNECT_CALIBRE, CREATE_HOTSPOT };
-
 /**
- * NetworkModeSelectionActivity presents file transfer and WiFi actions:
- * - "Web Upload" - Start browser-based transfer over station WiFi
- * - "Connect WiFi" - Turn on WiFi and connect to a saved or new network
- * - "Disable WiFi" - Turn WiFi off when it is no longer needed
+ * NetworkModeSelectionActivity presents WiFi and network actions:
+ * - "Show Web Upload URL" - Show the always-on upload server address
+ * - "Turn WiFi On" - Turn on WiFi and connect to a saved or new network
+ * - "Turn WiFi Off" - Turn WiFi and background web services off
  * - "Connect to Calibre" - Use Calibre wireless device transfers
  * - "Create Hotspot" - Create an Access Point that others can connect to (AP mode)
  *

@@ -16,6 +16,7 @@
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/NetworkServices.h"
 #include "network/WifiPower.h"
 
 namespace {
@@ -71,19 +72,18 @@ void CrossPointWebServerActivity::onExit() {
 
   state = WebServerActivityState::SHUTTING_DOWN;
 
-  // Stop the web server first, then clean up only the network services this
-  // activity owns.
-  stopWebServer();
+  if (isApMode) {
+    // AP mode is activity-owned. Station mode is managed by NetworkServices and
+    // intentionally keeps running after leaving this screen.
+    stopWebServer();
+    MDNS.end();
 
-  // Stop mDNS
-  MDNS.end();
-
-  // Stop DNS server if running (AP mode)
-  if (dnsServer) {
-    Serial.printf("[%lu] [WEBACT] Stopping DNS server...\n", millis());
-    dnsServer->stop();
-    delete dnsServer;
-    dnsServer = nullptr;
+    if (dnsServer) {
+      Serial.printf("[%lu] [WEBACT] Stopping DNS server...\n", millis());
+      dnsServer->stop();
+      delete dnsServer;
+      dnsServer = nullptr;
+    }
   }
 
   // Brief wait for LWIP stack to flush pending packets
@@ -100,8 +100,9 @@ void CrossPointWebServerActivity::onExit() {
       WiFi.mode(WIFI_OFF);
       delay(30);  // Allow WiFi hardware to power down
     }
+    NetworkServices::setSuspended(false);
   } else {
-    Serial.printf("[%lu] [WEBACT] Leaving station WiFi connected after file transfer\n", millis());
+    Serial.printf("[%lu] [WEBACT] Leaving station WiFi and background web server active\n", millis());
   }
 
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap after network cleanup: %d bytes\n", millis(), ESP.getFreeHeap());
@@ -137,6 +138,19 @@ void CrossPointWebServerActivity::showModeSelection() {
       ));
 }
 
+void CrossPointWebServerActivity::showWebServerStatus() {
+  if (!WifiPower::hasConnection() || !NetworkServices::ensureWebServerRunning()) {
+    showModeSelection();
+    return;
+  }
+
+  isApMode = false;
+  connectedIP = WifiPower::currentIp();
+  connectedSSID = WifiPower::currentSsid();
+  state = WebServerActivityState::SERVER_RUNNING;
+  updateRequired = true;
+}
+
 void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
   Serial.printf("[%lu] [WEBACT] Network mode selected: %d\n", millis(), static_cast<int>(mode));
 
@@ -168,6 +182,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   }
 
   if (mode == NetworkMode::DISABLE_WIFI) {
+    NetworkServices::stop();
     WifiPower::disable();
     SETTINGS.wifiEnabled = 0;
     SETTINGS.saveToFile();
@@ -177,15 +192,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
 
   if (mode == NetworkMode::WEB_UPLOAD) {
     if (WifiPower::hasConnection()) {
-      connectedIP = WifiPower::currentIp();
-      connectedSSID = WifiPower::currentSsid();
-      isApMode = false;
-
-      if (MDNS.begin(AP_HOSTNAME)) {
-        Serial.printf("[%lu] [WEBACT] mDNS started: http://%s.local/\n", millis(), AP_HOSTNAME);
-      }
-
-      startWebServer();
+      showWebServerStatus();
       return;
     }
 
@@ -213,13 +220,7 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
 
     exitActivity();
 
-    // Start mDNS for hostname resolution
-    if (MDNS.begin(AP_HOSTNAME)) {
-      Serial.printf("[%lu] [WEBACT] mDNS started: http://%s.local/\n", millis(), AP_HOSTNAME);
-    }
-
-    // Start the web server
-    startWebServer();
+    showWebServerStatus();
   } else {
     // User cancelled, failed, or only changed the WiFi connection.
     exitActivity();
@@ -232,6 +233,7 @@ void CrossPointWebServerActivity::startAccessPoint() {
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap before AP start: %d bytes\n", millis(), ESP.getFreeHeap());
 
   staWasActiveBeforeAp = WifiPower::isStationEnabled();
+  NetworkServices::setSuspended(true);
 
   // Configure and start the AP
   WiFi.mode(staWasActiveBeforeAp ? WIFI_AP_STA : WIFI_AP);
@@ -288,6 +290,11 @@ void CrossPointWebServerActivity::startAccessPoint() {
 void CrossPointWebServerActivity::startWebServer() {
   Serial.printf("[%lu] [WEBACT] Starting web server...\n", millis());
 
+  if (!isApMode) {
+    showWebServerStatus();
+    return;
+  }
+
   // Create the web server instance
   webServer.reset(new CrossPointWebServer());
   webServer->begin();
@@ -301,7 +308,7 @@ void CrossPointWebServerActivity::startWebServer() {
     xSemaphoreTake(renderingMutex, portMAX_DELAY);
     render();
     xSemaphoreGive(renderingMutex);
-    Serial.printf("[%lu] [WEBACT] Rendered File Transfer screen\n", millis());
+    Serial.printf("[%lu] [WEBACT] Rendered Network screen\n", millis());
   } else {
     Serial.printf("[%lu] [WEBACT] ERROR: Failed to start web server!\n", millis());
     webServer.reset();
@@ -328,6 +335,22 @@ void CrossPointWebServerActivity::loop() {
 
   // Handle different states
   if (state == WebServerActivityState::SERVER_RUNNING) {
+    if (!isApMode) {
+      if (!WifiPower::hasConnection()) {
+        showModeSelection();
+        return;
+      }
+
+      connectedIP = WifiPower::currentIp();
+      connectedSSID = WifiPower::currentSsid();
+      NetworkServices::ensureWebServerRunning();
+
+      if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+        showModeSelection();
+      }
+      return;
+    }
+
     // Handle DNS requests for captive portal (AP mode only)
     if (isApMode && dnsServer) {
       dnsServer->processNextRequest();
@@ -450,7 +473,7 @@ void CrossPointWebServerActivity::renderServerRunning() const {
   // Use consistent line spacing
   constexpr int LINE_SPACING = 28;  // Space between lines
 
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "File Transfer", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, "Network", true, EpdFontFamily::BOLD);
 
   if (isApMode) {
     // AP mode display - center the content block
@@ -483,7 +506,8 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     renderer.drawCenteredText(SMALL_FONT_ID, startY + LINE_SPACING * 6, "or scan QR code with your phone:");
     drawQRCode(renderer, (480 - 6 * 33) / 2, startY + LINE_SPACING * 7, hostnameUrl);
   } else {
-    // STA mode display (original behavior)
+    // STA mode display. The background server stays up while WiFi is connected,
+    // even after leaving this screen.
     const int startY = 65;
 
     std::string ssidInfo = "Network: " + connectedSSID;
@@ -503,13 +527,21 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     std::string hostnameUrl = std::string("or http://") + AP_HOSTNAME + ".local/";
     renderer.drawCenteredText(SMALL_FONT_ID, startY + LINE_SPACING * 3, hostnameUrl.c_str());
 
-    renderer.drawCenteredText(SMALL_FONT_ID, startY + LINE_SPACING * 4, "Open this URL in your browser");
+    renderer.drawCenteredText(SMALL_FONT_ID, startY + LINE_SPACING * 4, "Web server runs while WiFi is connected");
 
     // Show QR code for URL
     drawQRCode(renderer, (480 - 6 * 33) / 2, startY + LINE_SPACING * 6, webInfo);
     renderer.drawCenteredText(SMALL_FONT_ID, startY + LINE_SPACING * 5, "or scan QR code with your phone:");
   }
 
-  const auto labels = mappedInput.mapLabels("« Exit", "", "", "");
+  const auto labels = mappedInput.mapLabels(isApMode ? "« Exit" : "« Network", "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+bool CrossPointWebServerActivity::skipLoopDelay() {
+  return (isApMode && webServer && webServer->isRunning()) || (!isApMode && NetworkServices::isWebServerRunning());
+}
+
+bool CrossPointWebServerActivity::preventAutoSleep() {
+  return (isApMode && webServer && webServer->isRunning()) || (!isApMode && NetworkServices::preventAutoSleep());
 }

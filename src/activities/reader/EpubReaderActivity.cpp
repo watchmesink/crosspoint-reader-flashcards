@@ -776,7 +776,7 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
     GUI.drawBattery(renderer, Rect{orientedMarginLeft + 1, textY, metrics.batteryWidth, metrics.batteryHeight},
                     showBatteryPercentage);
     if (WifiPower::hasConnection()) {
-      GUI.drawWifiIcon(renderer, orientedMarginLeft + (showBatteryPercentage ? 53 : 24), textY + 6);
+      GUI.drawWifiStatus(renderer, orientedMarginLeft + (showBatteryPercentage ? 53 : 24), textY + 7);
     }
   }
 
@@ -787,7 +787,7 @@ void EpubReaderActivity::renderStatusBar(const int orientedMarginRight, const in
 
     int batterySize = showBattery ? (showBatteryPercentage ? 50 : 20) : 0;
     if (showBattery && WifiPower::hasConnection()) {
-      batterySize += 20;
+      batterySize += GUI.getWifiStatusWidth(renderer) + 6;
     }
     const int titleMarginLeft = batterySize + 30;
     const int titleMarginRight = progressTextWidth + 30;

@@ -12,6 +12,7 @@
 #include <limits>
 #include <vector>
 
+#include "FlashcardsModel.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -22,8 +23,6 @@ constexpr unsigned long GO_HOME_MS = 1000;
 constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION = 5;
 constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION_LEGACY = 4;
 constexpr char FLASHCARD_PROGRESS_FILE[] = "/.crosspoint/flashcards_global.bin";
-constexpr char FLASHCARDS_FOLDER[] = "/flashcards";
-constexpr char FLASHCARDS_ALT_FOLDER[] = "/~/flashcards";
 constexpr size_t MAX_FLASHCARDS_TOTAL = 900;
 constexpr size_t FLASHCARD_BATCH_SIZE = 20;
 constexpr uint8_t CARD_TEXT_SIZE_SMALL = 0;
@@ -635,13 +634,14 @@ bool FlashcardsActivity::parseFlashcardsFile(const std::string& path, int& skipp
 bool FlashcardsActivity::isTxtFile(const std::string& fileName) { return StringUtils::checkFileExtension(fileName, ".txt"); }
 
 std::string FlashcardsActivity::getFlashcardsFolderPath() {
-  if (Storage.exists(FLASHCARDS_FOLDER)) {
-    return FLASHCARDS_FOLDER;
-  }
-  if (Storage.exists(FLASHCARDS_ALT_FOLDER)) {
-    return FLASHCARDS_ALT_FOLDER;
-  }
-  return FLASHCARDS_FOLDER;
+  return FlashcardsModel::findFlashcardsFolder([](const std::string& path) {
+    FsFile dir = Storage.open(path.c_str());
+    const bool isDirectory = dir && dir.isDirectory();
+    if (dir) {
+      dir.close();
+    }
+    return isDirectory;
+  });
 }
 
 void FlashcardsActivity::restoreOrCreateBatch() {

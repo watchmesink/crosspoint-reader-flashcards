@@ -24,7 +24,7 @@ bool containsMode(const std::vector<NetworkMode>& modes, const NetworkMode mode)
 void testFlashcardsFolderResolution() {
   const auto& candidates = FlashcardsModel::folderCandidates();
   require(!candidates.empty(), "flashcards folder candidate list is not empty");
-  require(candidates.front() == "/flashcards", "primary flashcards folder stays /flashcards");
+  require(candidates.front() == "/~/flashcards", "USB-visible flashcards folder is preferred");
   require(containsMode(NetworkMenuModel::menuModes(false, false), NetworkMode::CONNECT_WIFI),
           "sanity check shared test helper");
 
@@ -46,7 +46,16 @@ void testFlashcardsFolderResolution() {
   selected = FlashcardsModel::findFlashcardsFolder([](const std::string&) {
     return false;
   });
-  require(selected == "/flashcards", "falls back to /flashcards for the user-facing error path");
+  require(selected == "/~/flashcards", "falls back to ~/flashcards for the user-facing error path");
+
+  require(FlashcardsModel::isTxtFile("deck.txt"), "recognizes lowercase .txt files");
+  require(FlashcardsModel::isTxtFile("deck.TXT"), "recognizes uppercase .TXT files");
+  require(!FlashcardsModel::isTxtFile("deck.csv"), "rejects non-txt files");
+
+  require(FlashcardsModel::entryFilePath("/~/flashcards", "deck.txt") == "/~/flashcards/deck.txt",
+          "builds path for basename entries");
+  require(FlashcardsModel::entryFilePath("/~/flashcards", "/~/flashcards/deck.txt") == "/~/flashcards/deck.txt",
+          "keeps absolute paths returned by SdFat directory entries");
 }
 
 void testNetworkMenuOffState() {

@@ -16,7 +16,6 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/StringUtils.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
@@ -246,7 +245,7 @@ void FlashcardsActivity::render() const {
       currentCardIndex >= static_cast<int>(cards.size())) {
     if (cards.empty()) {
       renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 30, "No flashcards loaded");
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 55, "Put .txt files into /flashcards");
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 55, "Put .txt files into ~/flashcards");
       if (!statusMessage.empty()) {
         const std::string status =
             renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), pageWidth - metrics.contentSidePadding * 2);
@@ -508,7 +507,7 @@ bool FlashcardsActivity::loadAllFlashcards() {
 
     if (!file.isDirectory()) {
       const std::string fileName(name);
-      if (isTxtFile(fileName)) {
+      if (FlashcardsModel::isTxtFile(fileName)) {
         txtFiles.push_back(fileName);
       }
     }
@@ -531,11 +530,7 @@ bool FlashcardsActivity::loadAllFlashcards() {
   int filesWithCards = 0;
 
   for (const auto& fileName : txtFiles) {
-    std::string path = folderPath;
-    if (!path.empty() && path.back() != '/') {
-      path += "/";
-    }
-    path += fileName;
+    const std::string path = FlashcardsModel::entryFilePath(folderPath, fileName);
 
     const size_t countBefore = cards.size();
     int fileSkipped = 0;
@@ -577,8 +572,12 @@ bool FlashcardsActivity::loadAllFlashcards() {
 
 bool FlashcardsActivity::parseFlashcardsFile(const std::string& path, int& skippedLines, int& duplicateLines,
                                              bool& reachedLimit) {
-  FsFile file;
-  if (!Storage.openFileForRead("FCD", path, file)) {
+  FsFile file = Storage.open(path.c_str(), O_RDONLY);
+  if (!file || file.isDirectory()) {
+    if (file) {
+      file.close();
+    }
+    Serial.printf("[%lu] [FCD] Failed to open flashcards file: %s\n", millis(), path.c_str());
     return false;
   }
 
@@ -631,7 +630,7 @@ bool FlashcardsActivity::parseFlashcardsFile(const std::string& path, int& skipp
   return true;
 }
 
-bool FlashcardsActivity::isTxtFile(const std::string& fileName) { return StringUtils::checkFileExtension(fileName, ".txt"); }
+bool FlashcardsActivity::isTxtFile(const std::string& fileName) { return FlashcardsModel::isTxtFile(fileName); }
 
 std::string FlashcardsActivity::getFlashcardsFolderPath() {
   return FlashcardsModel::findFlashcardsFolder([](const std::string& path) {

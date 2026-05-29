@@ -93,7 +93,7 @@ CrossPoint supports sending books from Calibre using the CrossPoint Reader devic
    - Head to https://github.com/crosspoint-reader/calibre-plugins/releases to download the latest version of the crosspoint_reader plugin.
    - Download the zip file.
    - Open Calibre → Preferences → Plugins → Load plugin from file → Select the zip file.
-2. On the device: Network → Connect to Calibre. If WiFi is not connected, choose a saved or nearby network when prompted.
+2. On the device: File Transfer → Connect to Calibre → Join a network.
 3. Make sure your computer is on the same WiFi network.
 4. In Calibre, click "Send to device" to transfer books.
 
@@ -167,22 +167,28 @@ The Settings screen allows you to configure the device's behavior. There are a f
 Flashcards mode lets you study term/translation pairs using an Anki-style adaptive SM-2++ scheduler.
 
 1. On the Home screen, select **Flashcards**.
-2. Flashcards are loaded automatically from all `.txt` files in `/flashcards` on the SD card.
-3. A flashcards start screen is shown with:
+2. Choose one of the fixed decks: **German**, **Ukrainian**, or **English**.
+3. The selected deck loads all `.txt` files from its own folder on the SD card:
+   - `German` -> `/flashcards/german`
+   - `Ukrainian` -> `/flashcards/ukrainian`
+   - `English` -> `/flashcards/english`
+4. A flashcards start screen is shown with:
    - Algorithm (`SM-2++`)
-   - Total cards (across all files)
+   - Total cards in the selected deck
    - Memorized cards
+   - Current streak
    - **Learn** button (Confirm)
-4. In study mode:
+5. In study mode:
    - Press **Left** for **Hard**.
    - Press **Confirm** for **Good**.
    - Press **Right** for **Easy**.
    - Press **Up/Down** to flip prompt/translation.
-   - Press **Back** to return to Home.
-5. Study runs in persistent batches of 20 cards:
+   - Press **Back** to return to the deck summary.
+   - Hold **Back** to return to Home.
+6. Study runs in persistent batches of 20 cards:
    - `Hard`, `Good`, or `Easy` marks the current card as processed in the active batch.
    - After 20 cards are processed, the next batch is loaded automatically.
-   - If you leave Flashcards and return later, the same active batch is restored.
+   - If you leave a deck and return later, the same active batch is restored for that deck.
 
 Deck format uses Quizlet-style term/translation pairs, one card per line.
 Tab-separated rows are preferred, and comma-separated rows are also accepted:
@@ -192,10 +198,10 @@ hello	hola
 How are you?	Como estas?
 ```
 
-Supported flashcard source files: all `.txt` files in `/flashcards`.
+Supported flashcard source files: all `.txt` files in `/flashcards/<deck>`.
 
 > [!NOTE]
-> Flashcard progress is saved globally in `/.crosspoint/flashcards_global.bin` and resumes automatically.
+> Flashcard progress is saved separately for each deck in `/.crosspoint/flashcards_<deck>.bin` and resumes automatically.
 
 ### 3.7 Sleep Screen
 

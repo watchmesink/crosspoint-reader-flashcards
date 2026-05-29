@@ -8,20 +8,29 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <ctime>
 #include <cstdio>
 #include <limits>
 #include <vector>
 
-#include "FlashcardsModel.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ButtonNavigator.h"
+#include "util/StringUtils.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
-constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION = 5;
-constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION_LEGACY = 4;
-constexpr char FLASHCARD_PROGRESS_FILE[] = "/.crosspoint/flashcards_global.bin";
+constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION = 6;
+constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION_V5 = 5;
+constexpr uint8_t FLASHCARD_PROGRESS_FILE_VERSION_V4 = 4;
+constexpr char FLASHCARD_PROGRESS_FILE_LEGACY[] = "/.crosspoint/flashcards_global.bin";
+constexpr char FLASHCARD_PROGRESS_FILE_GERMAN[] = "/.crosspoint/flashcards_german.bin";
+constexpr char FLASHCARD_PROGRESS_FILE_UKRAINIAN[] = "/.crosspoint/flashcards_ukrainian.bin";
+constexpr char FLASHCARD_PROGRESS_FILE_ENGLISH[] = "/.crosspoint/flashcards_english.bin";
+constexpr char FLASHCARDS_FOLDER[] = "/flashcards";
+constexpr char FLASHCARDS_ALT_FOLDER[] = "/~/flashcards";
+constexpr size_t FLASHCARD_DECK_COUNT = 3;
 constexpr size_t MAX_FLASHCARDS_TOTAL = 900;
 constexpr size_t FLASHCARD_BATCH_SIZE = 20;
 constexpr uint8_t CARD_TEXT_SIZE_SMALL = 0;
@@ -94,6 +103,25 @@ void sortFileList(std::vector<std::string>& strs) {
     return *s1 == '\0' && *s2 != '\0';
   });
 }
+
+std::string joinPath(const std::string& parent, const std::string& child) {
+  if (parent.empty() || parent == "/") {
+    return "/" + child;
+  }
+  if (parent.back() == '/') {
+    return parent + child;
+  }
+  return parent + "/" + child;
+}
+
+bool storageDirectoryExists(const char* path) {
+  FsFile dir = Storage.open(path);
+  const bool exists = dir && dir.isDirectory();
+  if (dir) {
+    dir.close();
+  }
+  return exists;
+}
 }  // namespace
 
 void FlashcardsActivity::taskTrampoline(void* param) {
@@ -106,27 +134,13 @@ void FlashcardsActivity::onEnter() {
 
   renderingMutex = xSemaphoreCreateMutex();
 
-  cards.clear();
-  progressRecords.clear();
-  activeBatch.clear();
-
-  reviewStep = 0;
-  nextBatchStartOffset = 0;
-
-  currentCardIndex = -1;
-  showingAnswer = false;
-  cardTextSize = CARD_TEXT_SIZE_MEDIUM;
-
-  screenMode = ScreenMode::START;
+  deckSelectionIndex = static_cast<uint8_t>(DeckId::GERMAN);
+  activeDeck = DeckId::GERMAN;
+  deckLoaded = false;
+  screenMode = ScreenMode::DECK_SELECT;
   statusMessage.clear();
-
-  loadProgress();
-  loadAllFlashcards();
-  if (!cards.empty()) {
-    restoreOrCreateBatch();
-    selectNextCard(true);
-    saveProgress();
-  }
+  resetDeckState();
+  migrateLegacyFlashcards();
 
   updateRequired = true;
 
@@ -149,34 +163,61 @@ void FlashcardsActivity::onExit() {
   vSemaphoreDelete(renderingMutex);
   renderingMutex = nullptr;
 
-  saveProgress();
+  if (deckLoaded) {
+    saveProgress();
+  }
 
-  cards.clear();
-  progressRecords.clear();
-  activeBatch.clear();
+  resetDeckState();
+  deckLoaded = false;
 }
 
 void FlashcardsActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    onGoHome();
-    return;
-  }
-
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
     onGoHome();
     return;
   }
 
-  if (screenMode == ScreenMode::START) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-      adjustCardTextSize(-1);
-      return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-      adjustCardTextSize(1);
+  if (screenMode == ScreenMode::DECK_SELECT) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      onGoHome();
       return;
     }
 
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      deckSelectionIndex =
+          static_cast<uint8_t>(ButtonNavigator::previousIndex(static_cast<int>(deckSelectionIndex), FLASHCARD_DECK_COUNT));
+      updateRequired = true;
+      return;
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Down) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      deckSelectionIndex =
+          static_cast<uint8_t>(ButtonNavigator::nextIndex(static_cast<int>(deckSelectionIndex), FLASHCARD_DECK_COUNT));
+      updateRequired = true;
+      return;
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      loadDeck(static_cast<DeckId>(deckSelectionIndex));
+      return;
+    }
+
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (screenMode == ScreenMode::STUDY) {
+      screenMode = ScreenMode::START;
+    } else {
+      returnToDeckSelection();
+    }
+    updateRequired = true;
+    return;
+  }
+
+  if (screenMode == ScreenMode::START) {
     if (!cards.empty() && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       screenMode = ScreenMode::STUDY;
       if (currentCardIndex < 0 || currentCardIndex >= static_cast<int>(cards.size())) {
@@ -241,44 +282,73 @@ void FlashcardsActivity::render() const {
   const int contentBottom = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing;
   const int contentHeight = contentBottom - contentTop;
 
+  if (screenMode == ScreenMode::DECK_SELECT) {
+    renderer.drawCenteredText(UI_12_FONT_ID, contentTop + 10, "Choose Deck", true, EpdFontFamily::BOLD);
+
+    GUI.drawButtonMenu(
+        renderer,
+        Rect{0, contentTop + 35, pageWidth, contentHeight - 90},
+        static_cast<int>(FLASHCARD_DECK_COUNT),
+        static_cast<int>(deckSelectionIndex),
+        [](const int index) {
+          return std::string(getDeckDefinition(static_cast<DeckId>(index)).label);
+        },
+        nullptr);
+
+    const auto& deck = getSelectedDeckDefinition();
+    const std::string folderPath = getDeckFolderPath(deck.id);
+    const std::string folderLabel = renderer.truncatedText(
+        UI_10_FONT_ID, folderPath.c_str(), pageWidth - metrics.contentSidePadding * 2);
+    renderer.drawCenteredText(UI_10_FONT_ID, contentBottom - 45, folderLabel.c_str());
+    renderer.drawCenteredText(UI_10_FONT_ID, contentBottom - 20, "Confirm to open");
+
+    const auto labels = mappedInput.mapLabels("Home", "Open", "Prev", "Next");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
+
   if (screenMode == ScreenMode::START || cards.empty() || currentCardIndex < 0 ||
       currentCardIndex >= static_cast<int>(cards.size())) {
+    const auto& deck = getDeckDefinition(activeDeck);
+    renderer.drawCenteredText(UI_12_FONT_ID, contentTop + 10, deck.label, true, EpdFontFamily::BOLD);
+
     if (cards.empty()) {
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 30, "No flashcards loaded");
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 55, "Put .txt files into ~/flashcards");
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 45, "No flashcards loaded");
+      const std::string pathText = "Put .txt files into " + getDeckFolderPath(activeDeck);
+      const std::string truncatedPath =
+          renderer.truncatedText(UI_10_FONT_ID, pathText.c_str(), pageWidth - metrics.contentSidePadding * 2);
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 70, truncatedPath.c_str());
       if (!statusMessage.empty()) {
         const std::string status =
             renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), pageWidth - metrics.contentSidePadding * 2);
-        renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 80, status.c_str());
+        renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 95, status.c_str());
       }
-      char textSizeLine[64];
-      snprintf(textSizeLine, sizeof(textSizeLine), "Card text size: %s", getCardTextSizeLabel());
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 115, textSizeLine);
-      const auto labels = mappedInput.mapLabels("Back", "", "-", "+");
+      const auto labels = mappedInput.mapLabels("Decks", "", "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       renderer.displayBuffer();
       return;
     }
 
     const int memorizedCards = countMemorizedCards();
-    const int processedInBatch = countProcessedInBatch();
-    const int batchSize = static_cast<int>(activeBatch.size());
-    const int totalBatchCards = batchSize > 0 ? batchSize : 0;
+    const char* streakSuffix = studyStreakDays == 1 ? "" : "s";
 
     char line1[96];
     char line2[96];
-    char line3[96];
     snprintf(line1, sizeof(line1), "Memorized cards: %d/%d", memorizedCards, static_cast<int>(cards.size()));
-    snprintf(line2, sizeof(line2), "Active batch: %d/%d", processedInBatch, totalBatchCards);
-    snprintf(line3, sizeof(line3), "Card text size: %s", getCardTextSizeLabel());
+    snprintf(line2, sizeof(line2), "Streak: %u day%s", static_cast<unsigned>(studyStreakDays), streakSuffix);
 
-    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 30, line1);
-    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 55, line2);
-    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 80, line3);
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 45, line1);
+    renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 70, line2);
+    if (!statusMessage.empty()) {
+      const std::string status =
+          renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), pageWidth - metrics.contentSidePadding * 2);
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 95, status.c_str());
+    }
 
     renderer.drawCenteredText(UI_12_FONT_ID, contentBottom - 30, "Press Confirm to Learn", true, EpdFontFamily::BOLD);
 
-    const auto labels = mappedInput.mapLabels("Back", "Learn", "-", "+");
+    const auto labels = mappedInput.mapLabels("Decks", "Learn", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
@@ -291,8 +361,7 @@ void FlashcardsActivity::render() const {
   const int batchSize = std::max(1, static_cast<int>(activeBatch.size()));
 
   char cardCounter[96];
-  snprintf(cardCounter, sizeof(cardCounter), "Card %d/%d (%d total)", batchPosition, batchSize,
-           static_cast<int>(cards.size()));
+  snprintf(cardCounter, sizeof(cardCounter), "Card %d/%d", batchPosition, batchSize);
   renderer.drawCenteredText(UI_10_FONT_ID, contentTop, cardCounter);
 
   const std::string memoryInfo = getMemorizationInfo(progress);
@@ -326,21 +395,87 @@ void FlashcardsActivity::render() const {
 
   renderer.drawCenteredText(UI_10_FONT_ID, contentBottom - 25, "Up/Down: Flip card");
 
-  const auto labels = mappedInput.mapLabels("Back", "Hard", "Good", "Easy");
+  const auto labels = mappedInput.mapLabels("Deck", "Hard", "Good", "Easy");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
 }
 
+void FlashcardsActivity::resetDeckState() {
+  cards.clear();
+  progressRecords.clear();
+  activeBatch.clear();
+
+  reviewStep = 0;
+  nextBatchStartOffset = 0;
+  studyStreakDays = 0;
+  lastStudyUnixDay = -1;
+
+  currentCardIndex = -1;
+  showingAnswer = false;
+  cardTextSize = CARD_TEXT_SIZE_LARGE;
+}
+
+bool FlashcardsActivity::loadDeck(const DeckId deck) {
+  if (deckLoaded) {
+    saveProgress();
+  }
+
+  activeDeck = deck;
+  statusMessage.clear();
+  resetDeckState();
+
+  const bool progressLoaded = loadProgress();
+  const bool cardsLoaded = loadAllFlashcards();
+  if (cardsLoaded) {
+    restoreOrCreateBatch();
+    selectNextCard(true);
+  }
+
+  deckLoaded = progressLoaded || cardsLoaded || !progressRecords.empty() || reviewStep != 0 || !activeBatch.empty() ||
+               studyStreakDays != 0 || lastStudyUnixDay >= 0;
+  screenMode = ScreenMode::START;
+  if (deckLoaded) {
+    saveProgress();
+  }
+  updateRequired = true;
+  return cardsLoaded;
+}
+
+void FlashcardsActivity::returnToDeckSelection() {
+  if (deckLoaded) {
+    saveProgress();
+  }
+  screenMode = ScreenMode::DECK_SELECT;
+}
+
 bool FlashcardsActivity::loadProgress() {
+  const std::string progressPath = getDeckDefinition(activeDeck).progressFile;
+  if (loadProgressFromPath(progressPath.c_str())) {
+    cardTextSize = CARD_TEXT_SIZE_LARGE;
+    return true;
+  }
+
+  if (activeDeck == DeckId::GERMAN) {
+    const bool loadedLegacy = loadProgressFromPath(FLASHCARD_PROGRESS_FILE_LEGACY);
+    cardTextSize = CARD_TEXT_SIZE_LARGE;
+    return loadedLegacy;
+  }
+
+  cardTextSize = CARD_TEXT_SIZE_LARGE;
+  return false;
+}
+
+bool FlashcardsActivity::loadProgressFromPath(const char* path) {
   FsFile file;
-  if (!Storage.openFileForRead("FCD", FLASHCARD_PROGRESS_FILE, file)) {
+  if (!Storage.openFileForRead("FCD", path, file)) {
     return false;
   }
 
   uint8_t version = 0;
   serialization::readPod(file, version);
-  if (version != FLASHCARD_PROGRESS_FILE_VERSION && version != FLASHCARD_PROGRESS_FILE_VERSION_LEGACY) {
+  if (version != FLASHCARD_PROGRESS_FILE_VERSION && version != FLASHCARD_PROGRESS_FILE_VERSION_V5 &&
+      version != FLASHCARD_PROGRESS_FILE_VERSION_V4) {
     file.close();
     return false;
   }
@@ -406,22 +541,39 @@ bool FlashcardsActivity::loadProgress() {
     activeBatch.push_back(batchCard);
   }
 
-  if (version >= FLASHCARD_PROGRESS_FILE_VERSION) {
-    serialization::readPod(file, cardTextSize);
+  if (version >= FLASHCARD_PROGRESS_FILE_VERSION_V5) {
+    uint8_t ignoredCardTextSize = CARD_TEXT_SIZE_LARGE;
+    serialization::readPod(file, ignoredCardTextSize);
   } else {
-    cardTextSize = CARD_TEXT_SIZE_MEDIUM;
+    cardTextSize = CARD_TEXT_SIZE_LARGE;
   }
-  cardTextSize = static_cast<uint8_t>(clampValue<int>(cardTextSize, CARD_TEXT_SIZE_SMALL, CARD_TEXT_SIZE_LARGE));
+  cardTextSize = CARD_TEXT_SIZE_LARGE;
+
+  if (version >= FLASHCARD_PROGRESS_FILE_VERSION) {
+    serialization::readPod(file, studyStreakDays);
+    serialization::readPod(file, lastStudyUnixDay);
+  } else {
+    studyStreakDays = 0;
+    lastStudyUnixDay = -1;
+  }
 
   file.close();
   return true;
 }
 
 bool FlashcardsActivity::saveProgress() const {
+  if (!deckLoaded) {
+    return true;
+  }
+
+  return saveProgressToPath(getDeckDefinition(activeDeck).progressFile);
+}
+
+bool FlashcardsActivity::saveProgressToPath(const char* path) const {
   Storage.mkdir("/.crosspoint");
 
   FsFile file;
-  if (!Storage.openFileForWrite("FCD", FLASHCARD_PROGRESS_FILE, file)) {
+  if (!Storage.openFileForWrite("FCD", path, file)) {
     return false;
   }
 
@@ -453,7 +605,10 @@ bool FlashcardsActivity::saveProgress() const {
     serialization::writePod(file, activeBatch[i].key);
     serialization::writePod(file, activeBatch[i].processed);
   }
-  serialization::writePod(file, cardTextSize);
+  const uint8_t fixedCardTextSize = CARD_TEXT_SIZE_LARGE;
+  serialization::writePod(file, fixedCardTextSize);
+  serialization::writePod(file, studyStreakDays);
+  serialization::writePod(file, lastStudyUnixDay);
 
   file.close();
   return true;
@@ -484,13 +639,13 @@ int FlashcardsActivity::findCardIndexByKey(const uint32_t key) const {
 bool FlashcardsActivity::loadAllFlashcards() {
   cards.clear();
 
-  const std::string folderPath = getFlashcardsFolderPath();
+  const std::string folderPath = getDeckFolderPath(activeDeck);
   auto root = Storage.open(folderPath.c_str());
   if (!root || !root.isDirectory()) {
     if (root) {
       root.close();
     }
-    statusMessage = "Folder /flashcards was not found";
+    statusMessage = "Folder " + folderPath + " was not found";
     return false;
   }
 
@@ -507,7 +662,7 @@ bool FlashcardsActivity::loadAllFlashcards() {
 
     if (!file.isDirectory()) {
       const std::string fileName(name);
-      if (FlashcardsModel::isTxtFile(fileName)) {
+      if (isTxtFile(fileName)) {
         txtFiles.push_back(fileName);
       }
     }
@@ -518,7 +673,7 @@ bool FlashcardsActivity::loadAllFlashcards() {
   root.close();
 
   if (txtFiles.empty()) {
-    statusMessage = "No .txt files found in /flashcards";
+    statusMessage = "No .txt files found in " + folderPath;
     return false;
   }
 
@@ -530,7 +685,11 @@ bool FlashcardsActivity::loadAllFlashcards() {
   int filesWithCards = 0;
 
   for (const auto& fileName : txtFiles) {
-    const std::string path = FlashcardsModel::entryFilePath(folderPath, fileName);
+    std::string path = folderPath;
+    if (!path.empty() && path.back() != '/') {
+      path += "/";
+    }
+    path += fileName;
 
     const size_t countBefore = cards.size();
     int fileSkipped = 0;
@@ -552,7 +711,7 @@ bool FlashcardsActivity::loadAllFlashcards() {
   }
 
   if (cards.empty()) {
-    statusMessage = "No valid cards in /flashcards/*.txt";
+    statusMessage = "No valid cards in " + folderPath + "/*.txt";
     return false;
   }
 
@@ -572,12 +731,8 @@ bool FlashcardsActivity::loadAllFlashcards() {
 
 bool FlashcardsActivity::parseFlashcardsFile(const std::string& path, int& skippedLines, int& duplicateLines,
                                              bool& reachedLimit) {
-  FsFile file = Storage.open(path.c_str(), O_RDONLY);
-  if (!file || file.isDirectory()) {
-    if (file) {
-      file.close();
-    }
-    Serial.printf("[%lu] [FCD] Failed to open flashcards file: %s\n", millis(), path.c_str());
+  FsFile file;
+  if (!Storage.openFileForRead("FCD", path, file)) {
     return false;
   }
 
@@ -630,17 +785,96 @@ bool FlashcardsActivity::parseFlashcardsFile(const std::string& path, int& skipp
   return true;
 }
 
-bool FlashcardsActivity::isTxtFile(const std::string& fileName) { return FlashcardsModel::isTxtFile(fileName); }
+bool FlashcardsActivity::isTxtFile(const std::string& fileName) { return StringUtils::checkFileExtension(fileName, ".txt"); }
 
-std::string FlashcardsActivity::getFlashcardsFolderPath() {
-  return FlashcardsModel::findFlashcardsFolder([](const std::string& path) {
-    FsFile dir = Storage.open(path.c_str());
-    const bool isDirectory = dir && dir.isDirectory();
-    if (dir) {
-      dir.close();
+const FlashcardsActivity::DeckDefinition& FlashcardsActivity::getDeckDefinition(const DeckId deck) {
+  static constexpr std::array<DeckDefinition, FLASHCARD_DECK_COUNT> deckDefinitions = {{
+      {DeckId::GERMAN, "German", "german", FLASHCARD_PROGRESS_FILE_GERMAN},
+      {DeckId::UKRAINIAN, "Ukrainian", "ukrainian", FLASHCARD_PROGRESS_FILE_UKRAINIAN},
+      {DeckId::ENGLISH, "English", "english", FLASHCARD_PROGRESS_FILE_ENGLISH},
+  }};
+
+  return deckDefinitions[static_cast<size_t>(deck)];
+}
+
+const FlashcardsActivity::DeckDefinition& FlashcardsActivity::getSelectedDeckDefinition() const {
+  return getDeckDefinition(static_cast<DeckId>(deckSelectionIndex));
+}
+
+std::string FlashcardsActivity::getFlashcardsRootPath() {
+  if (storageDirectoryExists(FLASHCARDS_FOLDER)) {
+    return FLASHCARDS_FOLDER;
+  }
+  if (storageDirectoryExists(FLASHCARDS_ALT_FOLDER)) {
+    return FLASHCARDS_ALT_FOLDER;
+  }
+  return FLASHCARDS_FOLDER;
+}
+
+std::string FlashcardsActivity::getDeckFolderPath(const DeckId deck) {
+  return joinPath(getFlashcardsRootPath(), getDeckDefinition(deck).folderName);
+}
+
+std::string FlashcardsActivity::buildUniqueDeckFilePath(const std::string& folderPath, const std::string& fileName) {
+  std::string stem = fileName;
+  std::string extension;
+  const size_t dotPos = fileName.find_last_of('.');
+  if (dotPos != std::string::npos) {
+    stem = fileName.substr(0, dotPos);
+    extension = fileName.substr(dotPos);
+  }
+
+  std::string candidate = joinPath(folderPath, fileName);
+  if (!Storage.exists(candidate.c_str())) {
+    return candidate;
+  }
+
+  for (int suffix = 2; suffix < 1000; suffix++) {
+    candidate = joinPath(folderPath, stem + "-" + std::to_string(suffix) + extension);
+    if (!Storage.exists(candidate.c_str())) {
+      return candidate;
     }
-    return isDirectory;
-  });
+  }
+
+  return joinPath(folderPath, stem + "-copy" + extension);
+}
+
+void FlashcardsActivity::migrateLegacyFlashcards() {
+  const std::string rootPath = getFlashcardsRootPath();
+  auto root = Storage.open(rootPath.c_str());
+  if (!root || !root.isDirectory()) {
+    if (root) {
+      root.close();
+    }
+    return;
+  }
+
+  std::vector<std::string> legacyFiles;
+  char name[500];
+  root.rewindDirectory();
+  for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+    file.getName(name, sizeof(name));
+    if (name[0] != '.' && !file.isDirectory() && isTxtFile(name)) {
+      legacyFiles.emplace_back(name);
+    }
+    file.close();
+  }
+  root.close();
+
+  if (legacyFiles.empty()) {
+    return;
+  }
+
+  const std::string germanFolderPath = getDeckFolderPath(DeckId::GERMAN);
+  Storage.mkdir(germanFolderPath.c_str(), true);
+
+  for (const auto& fileName : legacyFiles) {
+    const std::string sourcePath = joinPath(rootPath, fileName);
+    const std::string targetPath = buildUniqueDeckFilePath(germanFolderPath, fileName);
+    if (!Storage.rename(sourcePath.c_str(), targetPath.c_str())) {
+      Serial.printf("[%lu] [FCD] Failed to migrate %s -> %s\n", millis(), sourcePath.c_str(), targetPath.c_str());
+    }
+  }
 }
 
 void FlashcardsActivity::restoreOrCreateBatch() {
@@ -798,35 +1032,41 @@ void FlashcardsActivity::selectNextCard(const bool includeFutureCards) {
   showingAnswer = false;
 }
 
-void FlashcardsActivity::adjustCardTextSize(const int delta) {
-  const int next = clampValue<int>(static_cast<int>(cardTextSize) + delta, CARD_TEXT_SIZE_SMALL, CARD_TEXT_SIZE_LARGE);
-  if (next == static_cast<int>(cardTextSize)) {
+int FlashcardsActivity::getCardTextFontId() const { return NOTOSANS_14_FONT_ID; }
+
+int32_t FlashcardsActivity::getCurrentUnixDay() {
+  const time_t now = time(nullptr);
+  if (now <= 0) {
+    return -1;
+  }
+  return static_cast<int32_t>(now / 86400);
+}
+
+void FlashcardsActivity::updateStudyStreak() {
+  const int32_t currentDay = getCurrentUnixDay();
+  if (currentDay < 0) {
     return;
   }
 
-  cardTextSize = static_cast<uint8_t>(next);
-  saveProgress();
-  updateRequired = true;
-}
+  if (lastStudyUnixDay < 0) {
+    studyStreakDays = 1;
+    lastStudyUnixDay = currentDay;
+    return;
+  }
 
-int FlashcardsActivity::getCardTextFontId() const {
-  if (cardTextSize <= CARD_TEXT_SIZE_SMALL) {
-    return UI_10_FONT_ID;
+  if (currentDay == lastStudyUnixDay) {
+    return;
   }
-  if (cardTextSize >= CARD_TEXT_SIZE_LARGE) {
-    return NOTOSANS_14_FONT_ID;
-  }
-  return UI_12_FONT_ID;
-}
 
-const char* FlashcardsActivity::getCardTextSizeLabel() const {
-  if (cardTextSize <= CARD_TEXT_SIZE_SMALL) {
-    return "Small";
+  if (currentDay == lastStudyUnixDay + 1) {
+    if (studyStreakDays < std::numeric_limits<uint16_t>::max()) {
+      studyStreakDays++;
+    }
+  } else if (currentDay > lastStudyUnixDay + 1) {
+    studyStreakDays = 1;
   }
-  if (cardTextSize >= CARD_TEXT_SIZE_LARGE) {
-    return "Large";
-  }
-  return "Medium";
+
+  lastStudyUnixDay = currentDay;
 }
 
 void FlashcardsActivity::rateCurrentCard(const Sm2ppRating rating) {
@@ -862,6 +1102,7 @@ void FlashcardsActivity::rateCurrentCard(const Sm2ppRating rating) {
   }
 
   applySm2pp(progress, rating);
+  updateStudyStreak();
 
   for (auto& batchCard : activeBatch) {
     if (batchCard.key == ratedCardKey) {

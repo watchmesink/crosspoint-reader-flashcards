@@ -28,7 +28,6 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "network/NetworkServices.h"
 #include "network/WifiPower.h"
 #include "util/ButtonNavigator.h"
 
@@ -379,8 +378,6 @@ void loop() {
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
-  NetworkServices::loop();
-
   if (Serial && millis() - lastMemPrint >= 10000) {
     Serial.printf("[%lu] [MEM] Free: %d bytes, Total: %d bytes, Min Free: %d bytes\n", millis(), ESP.getFreeHeap(),
                   ESP.getHeapSize(), ESP.getMinFreeHeap());
@@ -389,8 +386,7 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || (currentActivity && currentActivity->preventAutoSleep()) ||
-      NetworkServices::preventAutoSleep()) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || (currentActivity && currentActivity->preventAutoSleep())) {
     lastActivityTime = millis();  // Reset inactivity timer
   }
 
@@ -426,7 +422,7 @@ void loop() {
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
   // Otherwise, use longer delay to save power
-  if ((currentActivity && currentActivity->skipLoopDelay()) || NetworkServices::wantsFastLoop()) {
+  if (currentActivity && currentActivity->skipLoopDelay()) {
     yield();  // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
     delay(10);  // Normal delay when no activity requires fast response

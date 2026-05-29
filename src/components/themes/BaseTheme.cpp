@@ -11,13 +11,10 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "network/WifiPower.h"
-#include "network/WifiStatusLabel.h"
 
 // Internal constants
 namespace {
 constexpr int batteryPercentSpacing = 4;
-constexpr int wifiStatusSpacing = 6;
 constexpr int homeMenuMargin = 20;
 constexpr int homeMarginTop = 30;
 }  // namespace
@@ -55,14 +52,6 @@ void BaseTheme::drawBattery(const GfxRenderer& renderer, Rect rect, const bool s
   }
 
   renderer.fillRect(x + 2, y + 2, filledWidth, rect.height - 4);
-}
-
-int BaseTheme::getWifiStatusWidth(const GfxRenderer& renderer) const {
-  return renderer.getTextWidth(SMALL_FONT_ID, WifiStatusLabel::CONNECTED);
-}
-
-void BaseTheme::drawWifiStatus(const GfxRenderer& renderer, const int x, const int y, const bool black) const {
-  renderer.drawText(SMALL_FONT_ID, x, y, WifiStatusLabel::CONNECTED, black);
 }
 
 void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const size_t current,
@@ -247,17 +236,11 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     const auto percentageText = std::to_string(percentage) + "%";
     batteryX -= renderer.getTextWidth(SMALL_FONT_ID, percentageText.c_str());
   }
-  const bool showWifi = WifiPower::hasConnection();
-  int statusStartX = batteryX;
-  if (showWifi) {
-    statusStartX -= getWifiStatusWidth(renderer) + wifiStatusSpacing;
-    drawWifiStatus(renderer, statusStartX, rect.y + 9);
-  }
   drawBattery(renderer, Rect{batteryX, rect.y + 5, BaseMetrics::values.batteryWidth, BaseMetrics::values.batteryHeight},
               showBatteryPercentage);
 
   if (title) {
-    int padding = rect.width - statusStartX;
+    int padding = rect.width - batteryX;
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title,
                                                  rect.width - padding * 2 - BaseMetrics::values.contentSidePadding * 2,
                                                  EpdFontFamily::BOLD);

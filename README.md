@@ -51,13 +51,20 @@ For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) do
 
 WiFi behaves like a device-level connection rather than a per-feature mode:
 
-1. Open **Network** from the home screen.
-2. Choose **Turn WiFi On** and connect to an available network.
+1. Enable WiFi from **Settings → Network**.
+2. Open the network list and connect to an available network.
 3. Successful connections are saved automatically.
-4. The web upload server starts automatically and keeps running while WiFi is connected.
-5. Switch to other features while WiFi stays connected.
-6. Return to **Network** and choose **Turn WiFi Off** when you want to save battery.
-7. Choose **Turn WiFi On** later to reconnect to the saved network.
+4. Switch to other features while WiFi stays connected.
+5. Disable WiFi from **Settings → Network** when you want to save battery.
+6. Re-enable WiFi later to reconnect to the saved network.
+
+## Changelog
+
+### 0.1.13-gleb - 2026-05-29
+
+- Fixed Flashcards deck loading when both `/flashcards` and `/~/flashcards` exist on the SD card.
+- Flashcards now verifies candidate roots by opening them as directories before selecting the language deck path.
+- Added a flashable firmware binary: `0.1.13-gleb-firmware.bin`.
 
 ## Installing
 

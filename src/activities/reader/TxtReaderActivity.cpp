@@ -11,7 +11,6 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "network/WifiPower.h"
 
 namespace {
 constexpr unsigned long goHomeMs = 1000;
@@ -546,14 +545,10 @@ void TxtReaderActivity::renderStatusBar(const int orientedMarginRight, const int
   if (showBattery) {
     GUI.drawBattery(renderer, Rect{orientedMarginLeft, textY, metrics.batteryWidth, metrics.batteryHeight},
                     showBatteryPercentage);
-    if (WifiPower::hasConnection()) {
-      GUI.drawWifiStatus(renderer, orientedMarginLeft + (showBatteryPercentage ? 52 : 23), textY + 7);
-    }
   }
 
   if (showTitle) {
-    const int wifiStatusWidth = (showBattery && WifiPower::hasConnection()) ? GUI.getWifiStatusWidth(renderer) + 6 : 0;
-    const int titleMarginLeft = 50 + wifiStatusWidth + 30 + orientedMarginLeft;
+    const int titleMarginLeft = 50 + 30 + orientedMarginLeft;
     const int titleMarginRight = progressTextWidth + 30 + orientedMarginRight;
     const int availableTextWidth = renderer.getScreenWidth() - titleMarginLeft - titleMarginRight;
 

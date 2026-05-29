@@ -5,7 +5,16 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "network/WifiPower.h"
+
+namespace {
+constexpr int MENU_ITEM_COUNT = 3;
+const char* MENU_ITEMS[MENU_ITEM_COUNT] = {"Join a Network", "Connect to Calibre", "Create Hotspot"};
+const char* MENU_DESCRIPTIONS[MENU_ITEM_COUNT] = {
+    "Connect to an existing WiFi network",
+    "Use Calibre wireless device transfers",
+    "Create a WiFi network others can join",
+};
+}  // namespace
 
 void NetworkModeSelectionActivity::taskTrampoline(void* param) {
   auto* self = static_cast<NetworkModeSelectionActivity*>(param);
@@ -45,12 +54,6 @@ void NetworkModeSelectionActivity::onExit() {
 }
 
 void NetworkModeSelectionActivity::loop() {
-  const auto menuModes = getMenuModes();
-  if (selectedIndex >= static_cast<int>(menuModes.size())) {
-    selectedIndex = static_cast<int>(menuModes.size()) - 1;
-    updateRequired = true;
-  }
-
   // Handle back button - cancel
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     onCancel();
@@ -59,18 +62,24 @@ void NetworkModeSelectionActivity::loop() {
 
   // Handle confirm button - select current option
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    onModeSelected(modeAtIndex(selectedIndex));
+    NetworkMode mode = NetworkMode::JOIN_NETWORK;
+    if (selectedIndex == 1) {
+      mode = NetworkMode::CONNECT_CALIBRE;
+    } else if (selectedIndex == 2) {
+      mode = NetworkMode::CREATE_HOTSPOT;
+    }
+    onModeSelected(mode);
     return;
   }
 
   // Handle navigation
-  buttonNavigator.onNext([this, &menuModes] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, menuModes.size());
+  buttonNavigator.onNext([this] {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, MENU_ITEM_COUNT);
     updateRequired = true;
   });
 
-  buttonNavigator.onPrevious([this, &menuModes] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, menuModes.size());
+  buttonNavigator.onPrevious([this] {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, MENU_ITEM_COUNT);
     updateRequired = true;
   });
 }
@@ -94,24 +103,18 @@ void NetworkModeSelectionActivity::render() const {
   const auto pageHeight = renderer.getScreenHeight();
 
   // Draw header
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "Network", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, "File Transfer", true, EpdFontFamily::BOLD);
 
-  // Draw current WiFi state
-  const std::string wifiStatus = getWifiStatusText();
-  renderer.drawCenteredText(UI_10_FONT_ID, 50, wifiStatus.c_str());
+  // Draw subtitle
+  renderer.drawCenteredText(UI_10_FONT_ID, 50, "How would you like to connect?");
 
   // Draw menu items centered on screen
   constexpr int itemHeight = 50;  // Height for each menu item (including description)
-  const auto menuModes = getMenuModes();
-  const int menuItemCount = static_cast<int>(menuModes.size());
-  const int startY = (pageHeight - (menuItemCount * itemHeight)) / 2 + 10;
+  const int startY = (pageHeight - (MENU_ITEM_COUNT * itemHeight)) / 2 + 10;
 
-  for (int i = 0; i < menuItemCount; i++) {
+  for (int i = 0; i < MENU_ITEM_COUNT; i++) {
     const int itemY = startY + i * itemHeight;
     const bool isSelected = (i == selectedIndex);
-    const NetworkMode mode = menuModes[i];
-    const std::string label = getModeLabel(mode);
-    const std::string description = getModeDescription(mode);
 
     // Draw selection highlight (black fill) for selected item
     if (isSelected) {
@@ -120,8 +123,8 @@ void NetworkModeSelectionActivity::render() const {
 
     // Draw text: black=false (white text) when selected (on black background)
     //            black=true (black text) when not selected (on white background)
-    renderer.drawText(UI_10_FONT_ID, 30, itemY, label.c_str(), /*black=*/!isSelected);
-    renderer.drawText(SMALL_FONT_ID, 30, itemY + 22, description.c_str(), /*black=*/!isSelected);
+    renderer.drawText(UI_10_FONT_ID, 30, itemY, MENU_ITEMS[i], /*black=*/!isSelected);
+    renderer.drawText(SMALL_FONT_ID, 30, itemY + 22, MENU_DESCRIPTIONS[i], /*black=*/!isSelected);
   }
 
   // Draw help text at bottom
@@ -129,28 +132,4 @@ void NetworkModeSelectionActivity::render() const {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
-}
-
-std::vector<NetworkMode> NetworkModeSelectionActivity::getMenuModes() const {
-  return NetworkMenuModel::menuModes(WifiPower::hasConnection(), WifiPower::isPoweredOn());
-}
-
-NetworkMode NetworkModeSelectionActivity::modeAtIndex(const int index) const {
-  const auto modes = getMenuModes();
-  if (index < 0 || index >= static_cast<int>(modes.size())) {
-    return modes.front();
-  }
-  return modes[index];
-}
-
-std::string NetworkModeSelectionActivity::getModeLabel(const NetworkMode mode) const {
-  return NetworkMenuModel::modeLabel(mode, WifiPower::hasConnection(), WifiPower::isPoweredOn());
-}
-
-std::string NetworkModeSelectionActivity::getModeDescription(const NetworkMode mode) const {
-  return NetworkMenuModel::modeDescription(mode, WifiPower::hasConnection());
-}
-
-std::string NetworkModeSelectionActivity::getWifiStatusText() const {
-  return NetworkMenuModel::wifiStatusText(WifiPower::isPoweredOn(), WifiPower::hasConnection(), WifiPower::currentSsid());
 }

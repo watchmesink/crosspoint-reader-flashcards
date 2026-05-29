@@ -264,7 +264,7 @@ void HomeActivity::render() {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {"Browse Files", "Recents", "Flashcards", "Network", "Settings"};
+  std::vector<const char*> menuItems = {"Browse Files", "Recents", "Flashcards", "File Transfer", "Settings"};
   if (hasOpdsUrl) {
     // Insert OPDS Browser after Recents
     menuItems.insert(menuItems.begin() + 2, "OPDS Browser");

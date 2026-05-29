@@ -12,10 +12,18 @@
 #include "../Activity.h"
 
 class FlashcardsActivity final : public Activity {
-  enum class ScreenMode : uint8_t { START = 0, STUDY = 1 };
+  enum class ScreenMode : uint8_t { DECK_SELECT = 0, START = 1, STUDY = 2 };
+  enum class DeckId : uint8_t { GERMAN = 0, UKRAINIAN = 1, ENGLISH = 2 };
   enum class Sm2ppPhase : uint8_t { LEARNING = 0, RELEARNING = 1, REVIEW = 2 };
   enum class Sm2ppRating : uint8_t { HARD = 0, GOOD = 1, EASY = 2 };
   enum class CardTextSize : uint8_t { SMALL = 0, MEDIUM = 1, LARGE = 2 };
+
+  struct DeckDefinition {
+    DeckId id;
+    const char* label;
+    const char* folderName;
+    const char* progressFile;
+  };
 
   struct Flashcard {
     uint32_t key = 0;
@@ -50,7 +58,10 @@ class FlashcardsActivity final : public Activity {
 
   bool updateRequired = false;
 
-  ScreenMode screenMode = ScreenMode::START;
+  ScreenMode screenMode = ScreenMode::DECK_SELECT;
+  uint8_t deckSelectionIndex = 0;
+  DeckId activeDeck = DeckId::GERMAN;
+  bool deckLoaded = false;
 
   std::vector<Flashcard> cards;
   std::vector<FlashcardProgress> progressRecords;
@@ -58,10 +69,12 @@ class FlashcardsActivity final : public Activity {
 
   uint32_t reviewStep = 0;
   uint16_t nextBatchStartOffset = 0;
+  uint16_t studyStreakDays = 0;
+  int32_t lastStudyUnixDay = -1;
 
   int currentCardIndex = -1;
   bool showingAnswer = false;
-  uint8_t cardTextSize = static_cast<uint8_t>(CardTextSize::MEDIUM);
+  uint8_t cardTextSize = static_cast<uint8_t>(CardTextSize::LARGE);
 
   std::string statusMessage;
 
@@ -71,15 +84,25 @@ class FlashcardsActivity final : public Activity {
   [[noreturn]] void displayTaskLoop();
   void render() const;
 
+  void resetDeckState();
+  bool loadDeck(DeckId deck);
+  void returnToDeckSelection();
   bool loadProgress();
+  bool loadProgressFromPath(const char* path);
   bool saveProgress() const;
+  bool saveProgressToPath(const char* path) const;
   size_t findOrCreateProgressRecord(uint32_t key);
   int findCardIndexByKey(uint32_t key) const;
 
   bool loadAllFlashcards();
   bool parseFlashcardsFile(const std::string& path, int& skippedLines, int& duplicateLines, bool& reachedLimit);
   static bool isTxtFile(const std::string& fileName);
-  static std::string getFlashcardsFolderPath();
+  static const DeckDefinition& getDeckDefinition(DeckId deck);
+  const DeckDefinition& getSelectedDeckDefinition() const;
+  static std::string getFlashcardsRootPath();
+  static std::string getDeckFolderPath(DeckId deck);
+  static std::string buildUniqueDeckFilePath(const std::string& folderPath, const std::string& fileName);
+  static void migrateLegacyFlashcards();
 
   void restoreOrCreateBatch();
   void createNextBatch();
@@ -90,9 +113,9 @@ class FlashcardsActivity final : public Activity {
   uint32_t getDueStep(const FlashcardProgress& progress) const;
   int findNextCardIndex(bool includeFutureCards) const;
   void selectNextCard(bool includeFutureCards);
-  void adjustCardTextSize(int delta);
   int getCardTextFontId() const;
-  const char* getCardTextSizeLabel() const;
+  void updateStudyStreak();
+  static int32_t getCurrentUnixDay();
 
   void rateCurrentCard(Sm2ppRating rating);
   void applySm2pp(FlashcardProgress& progress, Sm2ppRating rating);

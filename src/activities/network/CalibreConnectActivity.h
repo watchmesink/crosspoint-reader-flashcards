@@ -4,9 +4,11 @@
 #include <freertos/task.h>
 
 #include <functional>
+#include <memory>
 #include <string>
 
 #include "activities/ActivityWithSubactivity.h"
+#include "network/CrossPointWebServer.h"
 
 enum class CalibreConnectState { WIFI_SELECTION, SERVER_STARTING, SERVER_RUNNING, ERROR };
 
@@ -21,6 +23,7 @@ class CalibreConnectActivity final : public ActivityWithSubactivity {
   CalibreConnectState state = CalibreConnectState::WIFI_SELECTION;
   const std::function<void()> onComplete;
 
+  std::unique_ptr<CrossPointWebServer> webServer;
   std::string connectedIP;
   std::string connectedSSID;
   unsigned long lastHandleClientTime = 0;
@@ -38,6 +41,7 @@ class CalibreConnectActivity final : public ActivityWithSubactivity {
 
   void onWifiSelectionComplete(bool connected);
   void startWebServer();
+  void stopWebServer();
 
  public:
   explicit CalibreConnectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -46,6 +50,6 @@ class CalibreConnectActivity final : public ActivityWithSubactivity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
-  bool skipLoopDelay() override;
-  bool preventAutoSleep() override;
+  bool skipLoopDelay() override { return webServer && webServer->isRunning(); }
+  bool preventAutoSleep() override { return webServer && webServer->isRunning(); }
 };

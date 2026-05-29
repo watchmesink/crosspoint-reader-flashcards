@@ -94,7 +94,7 @@ void NetworkModeSelectionActivity::render() const {
   const auto pageHeight = renderer.getScreenHeight();
 
   // Draw header
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "File Transfer", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, "Network", true, EpdFontFamily::BOLD);
 
   // Draw current WiFi state
   const std::string wifiStatus = getWifiStatusText();
@@ -132,18 +132,7 @@ void NetworkModeSelectionActivity::render() const {
 }
 
 std::vector<NetworkMode> NetworkModeSelectionActivity::getMenuModes() const {
-  std::vector<NetworkMode> modes = {
-      NetworkMode::WEB_UPLOAD,
-      NetworkMode::CONNECT_WIFI,
-      NetworkMode::CONNECT_CALIBRE,
-      NetworkMode::CREATE_HOTSPOT,
-  };
-
-  if (WifiPower::isPoweredOn()) {
-    modes.push_back(NetworkMode::DISABLE_WIFI);
-  }
-
-  return modes;
+  return NetworkMenuModel::menuModes(WifiPower::hasConnection(), WifiPower::isPoweredOn());
 }
 
 NetworkMode NetworkModeSelectionActivity::modeAtIndex(const int index) const {
@@ -155,52 +144,13 @@ NetworkMode NetworkModeSelectionActivity::modeAtIndex(const int index) const {
 }
 
 std::string NetworkModeSelectionActivity::getModeLabel(const NetworkMode mode) const {
-  switch (mode) {
-    case NetworkMode::WEB_UPLOAD:
-      return "Web Upload";
-    case NetworkMode::CONNECT_WIFI:
-      if (WifiPower::hasConnection()) {
-        return "Change WiFi Network";
-      }
-      return WifiPower::isPoweredOn() ? "Connect WiFi" : "Enable & Connect WiFi";
-    case NetworkMode::DISABLE_WIFI:
-      return "Disable WiFi";
-    case NetworkMode::CONNECT_CALIBRE:
-      return "Connect to Calibre";
-    case NetworkMode::CREATE_HOTSPOT:
-      return "Create Hotspot";
-  }
-  return "";
+  return NetworkMenuModel::modeLabel(mode, WifiPower::hasConnection(), WifiPower::isPoweredOn());
 }
 
 std::string NetworkModeSelectionActivity::getModeDescription(const NetworkMode mode) const {
-  switch (mode) {
-    case NetworkMode::WEB_UPLOAD:
-      return WifiPower::hasConnection() ? "Upload books over the current WiFi" : "Connect WiFi, then start upload";
-    case NetworkMode::CONNECT_WIFI:
-      return WifiPower::hasConnection() ? "Select another saved or nearby network" : "Use a saved or nearby network";
-    case NetworkMode::DISABLE_WIFI:
-      return "Turn WiFi off to save battery";
-    case NetworkMode::CONNECT_CALIBRE:
-      return "Use Calibre wireless device transfers";
-    case NetworkMode::CREATE_HOTSPOT:
-      return "Create a WiFi network others can join";
-  }
-  return "";
+  return NetworkMenuModel::modeDescription(mode, WifiPower::hasConnection());
 }
 
 std::string NetworkModeSelectionActivity::getWifiStatusText() const {
-  if (!WifiPower::isPoweredOn()) {
-    return "WiFi: Off";
-  }
-
-  if (!WifiPower::hasConnection()) {
-    return "WiFi: On, not connected";
-  }
-
-  std::string status = "WiFi: " + WifiPower::currentSsid();
-  if (status.length() > 34) {
-    status.replace(31, status.length() - 31, "...");
-  }
-  return status;
+  return NetworkMenuModel::wifiStatusText(WifiPower::isPoweredOn(), WifiPower::hasConnection(), WifiPower::currentSsid());
 }

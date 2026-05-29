@@ -24,11 +24,11 @@ enum class WebServerActivityState {
  * CrossPointWebServerActivity is the entry point for file transfer functionality.
  * It:
  * - Presents file transfer and WiFi power/connection actions
- * - For web upload: Uses the active WiFi connection or launches WifiSelectionActivity
+ * - Shows the always-on web upload server when station WiFi is connected
  * - For AP mode: Creates an Access Point that clients can connect to
- * - Starts the CrossPointWebServer when connected
+ * - Starts an activity-owned CrossPointWebServer only for AP mode
  * - Handles client requests in its loop() function
- * - Cleans up the server on exit while leaving station WiFi connected
+ * - Leaves station WiFi and the background web server running on exit
  */
 class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   TaskHandle_t displayTaskHandle = nullptr;
@@ -59,6 +59,7 @@ class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   void renderServerRunning() const;
 
   void showModeSelection();
+  void showWebServerStatus();
   void onNetworkModeSelected(NetworkMode mode);
   void onWifiSelectionComplete(bool connected);
   void startAccessPoint();
@@ -72,6 +73,6 @@ class CrossPointWebServerActivity final : public ActivityWithSubactivity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
-  bool skipLoopDelay() override { return webServer && webServer->isRunning(); }
-  bool preventAutoSleep() override { return webServer && webServer->isRunning(); }
+  bool skipLoopDelay() override;
+  bool preventAutoSleep() override;
 };

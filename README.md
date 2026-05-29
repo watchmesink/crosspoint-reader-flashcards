@@ -51,12 +51,13 @@ For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) do
 
 WiFi behaves like a device-level connection rather than a per-feature mode:
 
-1. Open **File Transfer** from the home screen.
-2. Choose **Enable & Connect WiFi** and connect to an available network.
+1. Open **Network** from the home screen.
+2. Choose **Turn WiFi On** and connect to an available network.
 3. Successful connections are saved automatically.
-4. Switch to other features while WiFi stays connected.
-5. Return to **File Transfer** and choose **Disable WiFi** when you want to save battery.
-6. Choose **Connect WiFi** later to reconnect to the saved network.
+4. The web upload server starts automatically and keeps running while WiFi is connected.
+5. Switch to other features while WiFi stays connected.
+6. Return to **Network** and choose **Turn WiFi Off** when you want to save battery.
+7. Choose **Turn WiFi On** later to reconnect to the saved network.
 
 ## Installing
 

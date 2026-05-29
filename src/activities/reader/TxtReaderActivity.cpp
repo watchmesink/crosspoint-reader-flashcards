@@ -547,13 +547,13 @@ void TxtReaderActivity::renderStatusBar(const int orientedMarginRight, const int
     GUI.drawBattery(renderer, Rect{orientedMarginLeft, textY, metrics.batteryWidth, metrics.batteryHeight},
                     showBatteryPercentage);
     if (WifiPower::hasConnection()) {
-      GUI.drawWifiIcon(renderer, orientedMarginLeft + (showBatteryPercentage ? 52 : 23), textY + 6);
+      GUI.drawWifiStatus(renderer, orientedMarginLeft + (showBatteryPercentage ? 52 : 23), textY + 7);
     }
   }
 
   if (showTitle) {
-    const int wifiIconWidth = (showBattery && WifiPower::hasConnection()) ? 20 : 0;
-    const int titleMarginLeft = 50 + wifiIconWidth + 30 + orientedMarginLeft;
+    const int wifiStatusWidth = (showBattery && WifiPower::hasConnection()) ? GUI.getWifiStatusWidth(renderer) + 6 : 0;
+    const int titleMarginLeft = 50 + wifiStatusWidth + 30 + orientedMarginLeft;
     const int titleMarginRight = progressTextWidth + 30 + orientedMarginRight;
     const int availableTextWidth = renderer.getScreenWidth() - titleMarginLeft - titleMarginRight;
 

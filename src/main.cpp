@@ -28,6 +28,7 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/FlashcardsWebSync.h"
 #include "network/WifiPower.h"
 #include "util/ButtonNavigator.h"
 
@@ -376,6 +377,8 @@ void loop() {
 
   gpio.update();
 
+  FlashcardsWebSync::loopTick();
+
   renderer.setFadingFix(SETTINGS.fadingFix);
 
   if (Serial && millis() - lastMemPrint >= 10000) {
@@ -386,7 +389,8 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || (currentActivity && currentActivity->preventAutoSleep())) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || FlashcardsWebSync::isSyncing() ||
+      (currentActivity && currentActivity->preventAutoSleep())) {
     lastActivityTime = millis();  // Reset inactivity timer
   }
 

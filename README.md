@@ -192,3 +192,12 @@ CrossPoint Reader is **not affiliated with Xteink or any manufacturer of the X4 
 
 Huge shoutout to [**diy-esp32-epub-reader** by atomic14](https://github.com/atomic14/diy-esp32-epub-reader), which was a project I took a lot of inspiration from as I
 was making CrossPoint.
+
+## Companion web app, sync, and skill
+
+- [`web/`](./web) — mobile-friendly web app mirroring the on-device flashcards
+  (exact SM-2++ engine port, byte-compatible progress format) plus a LAN sync
+  agent that keeps decks and learning progress in two-way sync with the device.
+- [`skill/crosspoint-quizlet-sync/`](./skill/crosspoint-quizlet-sync) — agent
+  skill that turns pasted vocabulary into Quizlet-style deck files and uploads
+  them to the device and the web app, then triggers a sync.

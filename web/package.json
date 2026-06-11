@@ -1,0 +1,14 @@
+{
+  "name": "crosspoint-flashcards-web",
+  "version": "1.0.0",
+  "description": "Mobile web flashcards mirroring the Xteink X4 CrossPoint reader, with two-way device sync",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

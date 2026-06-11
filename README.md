@@ -1,203 +1,69 @@
-# CrossPoint Reader
+# CrossPoint Reader — Flashcards Edition
 
-Firmware for the **Xteink X4** e-paper display reader (unaffiliated with Xteink).
-Built using **PlatformIO** and targeting the **ESP32-C3** microcontroller.
+A fork of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) — the open-source firmware for the **Xteink X4** e-paper reader — that turns the device into a spaced-repetition vocabulary trainer with a companion web app.
 
-CrossPoint Reader is a purpose-built firmware designed to be a drop-in, fully open-source replacement for the official 
-Xteink firmware. It aims to match or improve upon the standard EPUB reading experience.
+This README covers **only what this fork adds**. For everything else (EPUB reading, file transfer, OPDS, KOReader sync, themes, build instructions, flashing), see the [upstream project](https://github.com/crosspoint-reader/crosspoint-reader).
 
-![](./docs/images/cover.jpg)
+## What's added
 
-## Motivation
+### 📇 Flashcards on the device
 
-E-paper devices are fantastic for reading, but most commercially available readers are closed systems with limited 
-customisation. The **Xteink X4** is an affordable, e-paper device, however the official firmware remains closed.
-CrossPoint exists partly as a fun side-project and partly to open up the ecosystem and truely unlock the device's
-potential.
+A new **Flashcards** mode on the home screen with three fixed decks — German, Ukrainian, English.
 
-CrossPoint Reader aims to:
-* Provide a **fully open-source alternative** to the official firmware.
-* Offer a **document reader** capable of handling EPUB content on constrained hardware.
-* Support **customisable font, layout, and display** options.
-* Run purely on the **Xteink X4 hardware**.
+- Decks are plain text files on the SD card: `/flashcards/{german,ukrainian,english}/*.txt`, one card per line as `term<TAB>translation` (falls back to splitting on the last comma; `#` starts a comment). Up to 900 cards per deck across any number of files.
+- Scheduling is **SM-2++**: learning steps → review phase with an ease factor (1.30–3.00), interval growth, lapses back to relearning, and deterministic interval fuzz. "Time" is the deck's review counter, not the wall clock, so the scheduler works on a device that sleeps most of the day.
+- Cards are studied in **batches of 20**; flip with Up/Down and rate **Hard / Good / Easy** (only *Easy* clears a card from the batch). The start screen shows memorized count and a daily study streak.
+- A card's identity is a hash of its content, so progress survives renaming, moving, or merging deck files. Progress is stored per deck in `/.crosspoint/flashcards_<deck>.bin`.
 
-This project is **not affiliated with Xteink**; it's built as a community project.
+### 📶 Persistent WiFi
 
-## Features & Usage
+WiFi can stay connected as a regular device connection (instead of only living inside the file-transfer screen): auto-reconnect to the last network on boot, WiFi controls in Settings, and the web server can keep running alongside normal use.
 
-- [x] EPUB parsing and rendering (EPUB 2 and EPUB 3)
-- [ ] Image support within EPUB
-- [x] Saved reading position
-- [x] File explorer with file picker
-  - [x] Basic EPUB picker from root directory
-  - [x] Support nested folders
-  - [ ] EPUB picker with cover art
-- [x] Flashcards mode with Quizlet-style decks and spaced repetition
-- [x] Custom sleep screen
-  - [x] Cover sleep screen
-- [x] Persistent WiFi with saved-network reconnect, manual enable/disable, book upload, and OTA updates
-- [x] Configurable font, layout, and display options
-  - [ ] User provided fonts
-  - [ ] Full UTF support
-- [x] Screen rotation
+### 🔄 Device-initiated sync (on WiFi connect)
 
-Multi-language support: Read EPUBs in various languages, including English, Spanish, French, German, Italian, Portuguese, Russian, Ukrainian, Polish, Swedish, Norwegian, [and more](./USER_GUIDE.md#supported-languages).
+When the device gets a WiFi connection, the firmware runs one background sync pass against the companion web app — no computer involved:
 
-See [the user guide](./USER_GUIDE.md) for instructions on operating CrossPoint. 
+- **Learning progress** is merged both ways (the more-reviewed record per card wins) and written back only when something changed.
+- **Deck files** reconcile in both directions: files added on the web download to the device, device-only files upload, files deleted on the web are deleted on the device too, and content conflicts resolve in the device's favor.
 
-For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) document.
+Configure it by placing `/.crosspoint/flashcards_sync.json` on the SD card:
 
-### WiFi workflow
-
-WiFi behaves like a device-level connection rather than a per-feature mode:
-
-1. Enable WiFi from **Settings → Network**.
-2. Open the network list and connect to an available network.
-3. Successful connections are saved automatically.
-4. Switch to other features while WiFi stays connected.
-5. Disable WiFi from **Settings → Network** when you want to save battery.
-6. Re-enable WiFi later to reconnect to the saved network.
-
-## Changelog
-
-### 0.1.13-gleb - 2026-05-29
-
-- Fixed Flashcards deck loading when both `/flashcards` and `/~/flashcards` exist on the SD card.
-- Flashcards now verifies candidate roots by opening them as directories before selecting the language deck path.
-- Added a flashable firmware binary: `0.1.13-gleb-firmware.bin`.
-
-## Installing
-
-### Web (latest firmware)
-
-1. Connect your Xteink X4 to your computer via USB-C
-2. Go to https://xteink.dve.al/ and click "Flash CrossPoint firmware"
-
-To revert back to the official firmware, you can flash the latest official firmware from https://xteink.dve.al/, or swap
-back to the other partition using the "Swap boot partition" button here https://xteink.dve.al/debug.
-
-### Web (specific firmware version)
-
-1. Connect your Xteink X4 to your computer via USB-C
-2. Download the `firmware.bin` file from the release of your choice via the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases)
-3. Go to https://xteink.dve.al/ and flash the firmware file using the "OTA fast flash controls" section
-
-To revert back to the official firmware, you can flash the latest official firmware from https://xteink.dve.al/, or swap
-back to the other partition using the "Swap boot partition" button here https://xteink.dve.al/debug.
-
-### Manual
-
-See [Development](#development) below.
-
-## Development
-
-### Prerequisites
-
-* **PlatformIO Core** (`pio`) or **VS Code + PlatformIO IDE**
-* Python 3.8+
-* USB-C cable for flashing the ESP32-C3
-* Xteink X4
-
-### Checking out the code
-
-CrossPoint uses PlatformIO for building and flashing the firmware. To get started, clone the repository:
-
-```
-git clone --recursive https://github.com/crosspoint-reader/crosspoint-reader
-
-# Or, if you've already cloned without --recursive:
-git submodule update --init --recursive
+```json
+{"url": "https://your-web-app.example", "token": "<API_TOKEN>", "enabled": true}
 ```
 
-### Flashing your device
+Without this file the feature is completely inert. One pass per connection, auto-sleep is held off while syncing, errors retry after 5 minutes; look for `[FSY]` lines in the serial log.
 
-Connect your Xteink X4 to your computer via USB-C and run the following command.
+### 📱 Companion web app — [`web/`](./web)
 
-```sh
-pio run --target upload
-```
-### Debugging
+A zero-dependency Node.js server + mobile-first PWA that mirrors the on-device experience: same decks, same batch mechanics, and an **exact port of the SM-2++ engine** (the test suite round-trips a real device progress file byte-identically). Study on your phone, manage deck files, and everything converges with the device on its next sync.
 
-After flashing the new features, it’s recommended to capture detailed logs from the serial port.
+- Storage is plain files on a volume; deployable on Railway in a few commands (see [`web/README.md`](./web/README.md)).
+- Browser access via a short PIN (exchanged server-side for the API token); scripts authenticate with a Bearer token.
+- Also ships a LAN-side sync agent (`web/agent/sync_agent.py`) as an alternative/fallback to the firmware-initiated sync — all sync paths use the same idempotent merge and can coexist.
 
-First, make sure all required Python packages are installed:
+### 🤖 Agent skill — [`skill/crosspoint-quizlet-sync/`](./skill/crosspoint-quizlet-sync)
 
-```python
-python3 -m pip install pyserial colorama matplotlib
-```
-after that run the script:
-```sh
-# For Linux
-# This was tested on Debian and should work on most Linux systems.
-python3 scripts/debugging_monitor.py
+A skill for coding agents (Claude Code / Codex style) that turns vocabulary pasted into chat into dated Quizlet-style deck files, routes each card to the right deck by language detection (optionally auto-translating single terms), uploads to both the device and the web app, and triggers a sync. Includes an optional Telegram bot for collecting words on the go.
 
-# For macOS
-python3 scripts/debugging_monitor.py /dev/cu.usbmodem2101
-```
-Minor adjustments may be required for Windows.
+### 🛠 Versioned builds
 
-## Internals
+Each build stamps an auto-incrementing `CROSSPOINT_VERSION` and exports the firmware as `<version>-firmware.bin` in the project root, ready to flash.
 
-CrossPoint Reader is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only
-has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based
-on this constraint.
+## Quick start
 
-### Data caching
+1. Build and flash like upstream CrossPoint (`pio run`), or grab a prebuilt `*-firmware.bin` from this repo.
+2. Put deck files on the SD card, e.g. `/flashcards/german/verbs.txt`:
 
-The first time chapters of a book are loaded, they are cached to the SD card. Subsequent loads are served from the 
-cache. This cache directory exists at `.crosspoint` on the SD card. The structure is as follows:
+   ```
+   anerkennen	to acknowledge
+   der Zweifel	the doubt
+   # comments and blank lines are ignored
+   ```
 
+3. Open **Flashcards** on the home screen and study.
+4. Optional: deploy [`web/`](./web), drop `flashcards_sync.json` onto the SD card, and the device will sync itself every time it joins WiFi.
 
-```
-.crosspoint/
-├── epub_12471232/       # Each EPUB is cached to a subdirectory named `epub_<hash>`
-│   ├── progress.bin     # Stores reading progress (chapter, page, etc.)
-│   ├── cover.bmp        # Book cover image (once generated)
-│   ├── book.bin         # Book metadata (title, author, spine, table of contents, etc.)
-│   └── sections/        # All chapter data is stored in the sections subdirectory
-│       ├── 0.bin        # Chapter data (screen count, all text layout info, etc.)
-│       ├── 1.bin        #     files are named by their index in the spine
-│       └── ...
-│
-└── epub_189013891/
-```
+## License
 
-Deleting the `.crosspoint` directory will clear the entire cache. 
-
-Due the way it's currently implemented, the cache is not automatically cleared when a book is deleted and moving a book
-file will use a new cache directory, resetting the reading progress.
-
-For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).
-
-## Contributing
-
-Contributions are very welcome!
-
-If you're looking for a way to help out, take a look at the [ideas discussion board](https://github.com/crosspoint-reader/crosspoint-reader/discussions/categories/ideas).
-If there's something there you'd like to work on, leave a comment so that we can avoid duplicated effort.
-
-Everyone here is a volunteer, so please be respectful and patient. For more details on our goverance and community 
-principles, please see [GOVERNANCE.md](GOVERNANCE.md).
-
-### To submit a contribution:
-
-1. Fork the repo
-2. Create a branch (`feature/dithering-improvement`)
-3. Make changes
-4. Submit a PR
-
----
-
-CrossPoint Reader is **not affiliated with Xteink or any manufacturer of the X4 hardware**.
-
-Huge shoutout to [**diy-esp32-epub-reader** by atomic14](https://github.com/atomic14/diy-esp32-epub-reader), which was a project I took a lot of inspiration from as I
-was making CrossPoint.
-
-## Companion web app, sync, and skill
-
-- [`web/`](./web) — mobile-friendly web app mirroring the on-device flashcards
-  (exact SM-2++ engine port, byte-compatible progress format) plus a LAN sync
-  agent that keeps decks and learning progress in two-way sync with the device.
-- [`skill/crosspoint-quizlet-sync/`](./skill/crosspoint-quizlet-sync) — agent
-  skill that turns pasted vocabulary into Quizlet-style deck files and uploads
-  them to the device and the web app, then triggers a sync.
+Same as upstream CrossPoint Reader (MIT) — see [LICENSE](./LICENSE).

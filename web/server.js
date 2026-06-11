@@ -117,6 +117,20 @@ function loadMeta(deck) {
   }
 }
 
+function addTombstone(deck, name) {
+  const meta = loadMeta(deck);
+  const tombstones = { ...(meta.tombstones || {}), [name]: new Date().toISOString() };
+  saveState(deck, loadState(deck) || engine.newDeckState(), { tombstones });
+}
+
+function clearTombstone(deck, name) {
+  const meta = loadMeta(deck);
+  if (!meta.tombstones || !(name in meta.tombstones)) return;
+  const tombstones = { ...meta.tombstones };
+  delete tombstones[name];
+  saveState(deck, loadState(deck) || engine.newDeckState(), { tombstones });
+}
+
 // Load deck (cards + state), reconciling like the firmware's loadDeck():
 // records exist for every card, batch restored/filtered, current card selected.
 function openDeck(deck) {
@@ -371,14 +385,29 @@ async function handleApi(req, res, url) {
       const body = await readBody(req);
       if (body.length > 1024 * 1024) return send(res, 413, { error: 'file too large' });
       atomicWrite(file, body);
+      clearTombstone(deck, name);
       openDeck(deck); // reconcile records/batch with the new card set
       return send(res, 200, { ok: true, name, size: body.length });
     }
     if (req.method === 'DELETE') {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+        addTombstone(deck, name); // so the device drops its copy instead of re-uploading
+      }
       openDeck(deck);
       return send(res, 200, { ok: true });
     }
+  }
+
+  // GET /api/sync/:deck/manifest — file inventory + deletion tombstones, used
+  // by the firmware's on-connect sync to reconcile /flashcards/<deck>/*.txt.
+  if (parts.length === 4 && parts[1] === 'sync' && parts[3] === 'manifest' && req.method === 'GET') {
+    if (!DECK_IDS.has(parts[2])) return send(res, 404, { error: 'unknown deck' });
+    const meta = loadMeta(parts[2]);
+    return send(res, 200, {
+      files: listDeckFiles(parts[2]).map(({ name, size, sha256 }) => ({ name, size, sha256 })),
+      tombstones: Object.keys(meta.tombstones || {}),
+    });
   }
 
   // POST /api/sync/:deck/progress {bin: base64|null} -> {bin: base64|null}

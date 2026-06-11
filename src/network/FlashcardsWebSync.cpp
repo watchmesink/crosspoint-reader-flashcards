@@ -26,7 +26,10 @@ namespace {
 constexpr char CONFIG_PATH[] = "/.crosspoint/flashcards_sync.json";
 constexpr char PROGRESS_DIR[] = "/.crosspoint";
 constexpr unsigned long CONNECT_SETTLE_MS = 4000;
+constexpr unsigned long BOOT_KICK_DELAY_MS = 8000;
+constexpr unsigned long CONNECT_TIMEOUT_MS = 25000;
 constexpr unsigned long RETRY_AFTER_ERROR_MS = 5 * 60 * 1000;
+constexpr int MAX_ATTEMPTS_PER_BOOT = 2;
 constexpr size_t MAX_DECK_FILE_BYTES = 256 * 1024;
 constexpr const char* DECKS[] = {"german", "ukrainian", "english"};
 
@@ -41,8 +44,17 @@ unsigned long connectedSinceMs = 0;
 bool attemptedThisConnection = false;
 unsigned long retryAtMs = 0;
 volatile bool syncing = false;
+volatile bool radioOffPending = false;
 TaskHandle_t syncTaskHandle = nullptr;
 std::string summary;
+
+// The module brings WiFi up itself for the boot-time pass and turns it back
+// off afterwards; piggybacked passes (WiFi already up for file transfer etc.)
+// leave the radio alone.
+bool bootKickDone = false;
+bool ownsConnection = false;
+unsigned long connectDeadlineMs = 0;
+int connectAttempts = 0;
 
 bool loadConfig(Config& config) {
   FsFile file;
@@ -498,6 +510,7 @@ void syncTask(void* param) {
     retryAtMs = millis() + RETRY_AFTER_ERROR_MS;
   }
 
+  radioOffPending = true;  // the main loop powers the radio down if we own it
   syncing = false;
   syncTaskHandle = nullptr;
   vTaskDelete(nullptr);
@@ -507,12 +520,67 @@ bool configPresent() { return Storage.exists(CONFIG_PATH); }
 
 }  // namespace
 
+void dropOwnedConnection() {
+  if (ownsConnection) {
+    ownsConnection = false;
+    WifiPower::disable();
+    Serial.printf("[%lu] [FSY] Radio off after sync window\n", millis());
+  }
+}
+
+bool startOwnedConnection() {
+  if (connectAttempts >= MAX_ATTEMPTS_PER_BOOT || !configPresent()) {
+    return false;
+  }
+  connectAttempts++;
+  if (!WifiPower::connectSaved()) {
+    return false;
+  }
+  ownsConnection = true;
+  connectDeadlineMs = millis() + CONNECT_TIMEOUT_MS;
+  Serial.printf("[%lu] [FSY] Bringing WiFi up for sync (attempt %d)\n", millis(), connectAttempts);
+  return true;
+}
+
 void loopTick() {
+  if (syncing || syncTaskHandle != nullptr) {
+    return;
+  }
+
+  if (radioOffPending) {
+    radioOffPending = false;
+    // Power down even before an error retry: the retry path reconnects.
+    dropOwnedConnection();
+  }
+
   const bool connected = WifiPower::hasConnection();
+
+  // Boot kick: bring WiFi up briefly for one pass when sync is configured.
+  if (!bootKickDone && millis() >= BOOT_KICK_DELAY_MS) {
+    bootKickDone = true;
+    if (!connected) {
+      startOwnedConnection();
+    }
+  }
+
+  // Retry after an errored pass: reconnect if the radio went down meanwhile.
+  if (retryAtMs != 0 && millis() >= retryAtMs) {
+    retryAtMs = 0;
+    attemptedThisConnection = false;
+    if (!connected && !startOwnedConnection()) {
+      dropOwnedConnection();
+      return;
+    }
+  }
+
   if (!connected) {
     wasConnected = false;
     attemptedThisConnection = false;
     connectedSinceMs = 0;
+    if (ownsConnection && millis() >= connectDeadlineMs) {
+      Serial.printf("[%lu] [FSY] WiFi connect timed out\n", millis());
+      dropOwnedConnection();
+    }
     return;
   }
 
@@ -520,23 +588,17 @@ void loopTick() {
     wasConnected = true;
     connectedSinceMs = millis();
   }
-
-  if (syncing || syncTaskHandle != nullptr) {
+  if (attemptedThisConnection) {
     return;
   }
-
-  const bool retryDue = retryAtMs != 0 && millis() >= retryAtMs;
-  if (attemptedThisConnection && !retryDue) {
-    return;
-  }
-  if (!attemptedThisConnection && millis() - connectedSinceMs < CONNECT_SETTLE_MS) {
+  if (millis() - connectedSinceMs < CONNECT_SETTLE_MS) {
     return;
   }
 
   attemptedThisConnection = true;
-  retryAtMs = 0;
 
   if (!configPresent()) {
+    dropOwnedConnection();
     return;
   }
 
@@ -545,6 +607,7 @@ void loopTick() {
     syncing = false;
     syncTaskHandle = nullptr;
     Serial.printf("[%lu] [FSY] Failed to start sync task\n", millis());
+    dropOwnedConnection();
   }
 }
 

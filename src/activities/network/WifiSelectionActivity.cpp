@@ -289,7 +289,6 @@ void WifiSelectionActivity::checkConnectionStatus() {
       WIFI_STORE.addCredential(selectedSSID, enteredPassword);
     }
     WIFI_STORE.setLastConnectedSsid(selectedSSID);
-    SETTINGS.wifiEnabled = 1;
     SETTINGS.saveToFile();
     xSemaphoreGive(renderingMutex);
 

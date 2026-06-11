@@ -29,7 +29,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/FlashcardsWebSync.h"
-#include "network/WifiPower.h"
 #include "util/ButtonNavigator.h"
 
 HalDisplay display;
@@ -335,14 +334,6 @@ void setup() {
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   Serial.printf("[%lu] [   ] Starting CrossPoint version " CROSSPOINT_VERSION "\n", millis());
-
-  if (SETTINGS.wifiEnabled) {
-    Serial.printf("[%lu] [WIFI] WiFi setting enabled, reconnecting to saved network\n", millis());
-    if (!WifiPower::connectSaved()) {
-      WifiPower::enableStation();
-      Serial.printf("[%lu] [WIFI] No saved network available for startup reconnect\n", millis());
-    }
-  }
 
   setupDisplayAndFonts();
 

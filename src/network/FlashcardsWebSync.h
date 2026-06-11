@@ -4,8 +4,11 @@
 
 // Device-initiated flashcards sync with the companion web app.
 //
-// When WiFi comes up (any path: boot auto-connect, settings, web server
-// activity), one background sync pass runs against the web app configured in
+// The device has no persistent WiFi: shortly after boot/wake this module
+// briefly brings WiFi up itself (last saved network), runs one background sync
+// pass, and powers the radio back off. If WiFi is already up for another
+// reason (file transfer etc.) the pass piggybacks on that connection and
+// leaves the radio alone. Configuration lives in
 // /.crosspoint/flashcards_sync.json:
 //
 //   {"url": "https://your-app.example", "token": "<API_TOKEN>", "enabled": true}
@@ -20,8 +23,9 @@
 //      device-only files, honor web deletion tombstones, and re-upload on
 //      content mismatch (device wins).
 //
-// Without the config file this module is inert. Sync runs at most once per
-// WiFi connection (retried after a delay if the pass had errors).
+// Without the config file this module is inert (and never touches the radio).
+// Sync runs at most once per WiFi connection (retried after a delay if the
+// pass had errors).
 namespace FlashcardsWebSync {
 
 // Cheap state machine tick; call from the main loop.

@@ -15,6 +15,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const API_TOKEN = process.env.API_TOKEN || '';
 const PIN = process.env.PIN || ''; // optional short unlock code for the browser UI
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const APP_SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 // PIN brute-force lockout: 5 wrong attempts per IP -> 15 min lock.
 const pinAttempts = new Map(); // ip -> {fails, lockUntil}
@@ -131,11 +132,55 @@ function clearTombstone(deck, name) {
   saveState(deck, loadState(deck) || engine.newDeckState(), { tombstones });
 }
 
+function defaultAppSettings() {
+  return { batchSize: engine.BATCH_SIZE };
+}
+
+function normalizeAppSettings(raw) {
+  return {
+    batchSize: engine.normalizeBatchSize(raw && raw.batchSize),
+  };
+}
+
+function loadAppSettings() {
+  if (!fs.existsSync(APP_SETTINGS_FILE)) return defaultAppSettings();
+  try {
+    return normalizeAppSettings(JSON.parse(fs.readFileSync(APP_SETTINGS_FILE, 'utf8')));
+  } catch {
+    return defaultAppSettings();
+  }
+}
+
+function saveAppSettings(settings) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const normalized = normalizeAppSettings(settings);
+  atomicWrite(APP_SETTINGS_FILE, JSON.stringify(normalized, null, 1));
+  return normalized;
+}
+
+function publicAppSettings() {
+  const settings = loadAppSettings();
+  return {
+    batchSize: settings.batchSize,
+    minBatchSize: engine.MIN_BATCH_SIZE,
+    maxBatchSize: engine.BATCH_SIZE,
+  };
+}
+
+function applyAppSettingsUpdate(body) {
+  const settings = loadAppSettings();
+  if (Object.prototype.hasOwnProperty.call(body, 'batchSize')) {
+    settings.batchSize = engine.normalizeBatchSize(body.batchSize);
+  }
+  return saveAppSettings(settings);
+}
+
 // Load deck (cards + state), reconciling like the firmware's loadDeck():
 // records exist for every card, batch restored/filtered, current card selected.
 function openDeck(deck) {
   const parsed = engine.parseDeckFiles(readDeckFileContents(deck));
   const cards = parsed.cards;
+  const settings = loadAppSettings();
   let state = loadState(deck);
   const hadState = !!state;
   if (!state) state = engine.newDeckState();
@@ -148,11 +193,11 @@ function openDeck(deck) {
   });
   for (const card of cards) engine.findOrCreateRecord(state, card.key);
   if (cards.length > 0) {
-    engine.restoreOrCreateBatch(state, cards);
+    engine.restoreOrCreateBatch(state, cards, settings.batchSize);
     const validCurrent = state.currentKey != null && cards.some((c) => c.key === state.currentKey);
     const inBatchUnprocessed =
       validCurrent && state.batch.some((b) => b.key === state.currentKey && b.processed === 0);
-    if (!inBatchUnprocessed) engine.selectNextCard(state, cards, true);
+    if (!inBatchUnprocessed) engine.selectNextCard(state, cards, true, settings.batchSize);
   } else {
     state.batch = [];
     state.currentKey = null;
@@ -165,7 +210,7 @@ function openDeck(deck) {
   });
   if (!hadState || before !== after) saveState(deck, state);
 
-  return { cards, state, statusMessage: parsed.statusMessage };
+  return { cards, state, statusMessage: parsed.statusMessage, settings };
 }
 
 function deckSummary(deckDef) {
@@ -193,7 +238,7 @@ function deckSummary(deckDef) {
 
 function deckView(deckId) {
   const deckDef = DECKS.find((d) => d.id === deckId);
-  const { cards, state, statusMessage } = openDeck(deckId);
+  const { cards, state, statusMessage, settings } = openDeck(deckId);
   const recByKey = new Map(state.records.map((r) => [r.key, r]));
 
   let current = null;
@@ -236,6 +281,7 @@ function deckView(deckId) {
     streakDays: state.streakDays,
     reviewStep: state.reviewStep,
     batchSize: state.batch.length,
+    configuredBatchSize: settings.batchSize,
     batchProcessed: state.batch.filter((b) => b.processed).length,
     dueNow,
     current,
@@ -342,6 +388,25 @@ async function handleApi(req, res, url) {
 
   if (!authorized(req, url)) return send(res, 401, { error: 'unauthorized' });
 
+  // GET/POST /api/settings
+  if (parts.length === 2 && parts[1] === 'settings') {
+    if (req.method === 'GET') return send(res, 200, publicAppSettings());
+    if (req.method === 'POST') {
+      try {
+        const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+        const settings = applyAppSettingsUpdate(body);
+        for (const d of DECKS) openDeck(d.id);
+        return send(res, 200, {
+          batchSize: settings.batchSize,
+          minBatchSize: engine.MIN_BATCH_SIZE,
+          maxBatchSize: engine.BATCH_SIZE,
+        });
+      } catch (err) {
+        return send(res, 400, { error: String(err.message || err) });
+      }
+    }
+  }
+
   // GET /api/decks
   if (parts.length === 2 && parts[1] === 'decks' && req.method === 'GET') {
     return send(res, 200, DECKS.map(deckSummary));
@@ -361,8 +426,10 @@ async function handleApi(req, res, url) {
     const rating = RATINGS[String(body.rating || '').toLowerCase()];
     const key = Number(body.key) >>> 0;
     if (rating === undefined) return send(res, 400, { error: 'rating must be hard|good|easy' });
-    const { cards, state } = openDeck(deck);
-    if (!engine.rateCard(state, cards, key, rating)) return send(res, 404, { error: 'card not found' });
+    const { cards, state, settings } = openDeck(deck);
+    if (!engine.rateCard(state, cards, key, rating, Date.now(), settings.batchSize)) {
+      return send(res, 404, { error: 'card not found' });
+    }
     saveState(deck, state);
     return send(res, 200, deckView(deck));
   }

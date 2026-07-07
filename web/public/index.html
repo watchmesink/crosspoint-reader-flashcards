@@ -149,11 +149,19 @@
   .file-name { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .file-size { font-size: 12px; color: var(--muted); }
   .file-del { background: none; border: none; color: var(--hard); font-size: 17px; cursor: pointer; padding: 4px 6px; }
-  textarea, input[type=text] {
+  textarea, input[type=text], input[type=number] {
     width: 100%; background: var(--paper); color: var(--ink);
     border: 1.5px solid var(--line); border-radius: 14px; padding: 12px; font-size: 15px; font-family: inherit;
   }
   textarea { min-height: 110px; resize: vertical; }
+  .setting-group {
+    background: var(--paper); border: 1.5px solid var(--line); border-radius: var(--radius);
+    padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .setting-group label { font-size: 14px; color: var(--muted); font-weight: 700; }
+  .setting-inline { display: flex; align-items: center; gap: 10px; }
+  .setting-inline input { flex: 1; min-width: 0; }
+  .setting-range { color: var(--muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
   pre.viewer {
     background: var(--paper); border: 1.5px solid var(--line); border-radius: 14px;
     padding: 14px; font-size: 13px; overflow: auto; white-space: pre-wrap; margin: 0;
@@ -269,6 +277,7 @@ async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   try {
     if (parts.length === 0) return await showDeckList();
+    if (parts[0] === 'settings') return await showSettings();
     if (parts[0] === 'deck' && parts.length === 2) return await showDeckHome(parts[1]);
     if (parts[0] === 'deck' && parts[2] === 'study') return await showStudy(parts[1]);
     if (parts[0] === 'deck' && parts[2] === 'files') return await showFiles(parts[1]);
@@ -310,6 +319,47 @@ async function showDeckList() {
     el.onclick = () => nav('/deck/' + d.deck);
     main.appendChild(el);
   }
+
+  const settings = document.createElement('button');
+  settings.className = 'btn secondary';
+  settings.textContent = 'Settings';
+  settings.onclick = () => nav('/settings');
+  main.appendChild(settings);
+}
+
+async function showSettings() {
+  const settings = await api('/api/settings');
+  setHeader('Settings', { back: true });
+  const main = $('main');
+  main.classList.remove('no-scroll');
+  main.innerHTML = `
+    <div class="setting-group">
+      <label for="batchSizeInput">Cards per batch</label>
+      <div class="setting-inline">
+        <input type="number" id="batchSizeInput" min="${settings.minBatchSize}" max="${settings.maxBatchSize}"
+               step="1" inputmode="numeric" value="${settings.batchSize}">
+        <span class="setting-range">${settings.minBatchSize}-${settings.maxBatchSize}</span>
+      </div>
+    </div>
+    <button class="btn primary" id="settingsSave" type="button">Save Settings</button>`;
+
+  $('settingsSave').onclick = async () => {
+    const btn = $('settingsSave');
+    btn.disabled = true;
+    try {
+      const result = await api('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchSize: Number($('batchSizeInput').value) }),
+      });
+      $('batchSizeInput').value = result.batchSize;
+      toast('Settings saved');
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }
 
 async function showDeckHome(deck) {

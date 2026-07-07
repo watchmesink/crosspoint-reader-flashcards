@@ -117,6 +117,33 @@ test('batch creation wraps and advances offset', () => {
   assert.strictEqual(state.nextBatchStartOffset, 10);
 });
 
+test('custom batch size creates and restores smaller batches', () => {
+  const cards = mkCards(30);
+  const state = engine.newDeckState();
+  engine.createNextBatch(state, cards, 7);
+  assert.strictEqual(state.batch.length, 7);
+  assert.strictEqual(state.nextBatchStartOffset, 7);
+
+  state.batch = cards.slice(0, 12).map((c) => ({ key: c.key, processed: 0 }));
+  engine.restoreOrCreateBatch(state, cards, 5);
+  assert.strictEqual(state.batch.length, 5);
+  assert.deepStrictEqual(state.batch.map((b) => b.key), cards.slice(0, 5).map((c) => c.key));
+});
+
+test('custom batch size is used after a smaller batch completes', () => {
+  const cards = mkCards(25);
+  const state = engine.newDeckState();
+  engine.selectNextCard(state, cards, true, 6);
+  assert.strictEqual(state.batch.length, 6);
+  for (let i = 0; i < 6; i++) {
+    assert.ok(state.currentKey != null, `lost current card at step ${i}`);
+    engine.rateCard(state, cards, state.currentKey, engine.RATING.EASY, Date.now(), 6);
+  }
+  assert.strictEqual(state.reviewStep, 6);
+  assert.strictEqual(state.batch.length, 6);
+  assert.strictEqual(state.batch.filter((b) => b.processed).length, 0);
+});
+
 test('SM-2++ learning path: good, good, good graduates to review', () => {
   const cards = mkCards(25);
   const state = engine.newDeckState();

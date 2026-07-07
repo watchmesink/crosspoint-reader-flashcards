@@ -7,6 +7,7 @@
 const PROGRESS_VERSION = 6;
 const MAX_FLASHCARDS_TOTAL = 900;
 const BATCH_SIZE = 20;
+const MIN_BATCH_SIZE = 1;
 const LEARNING_STEPS = [1, 8, 48];
 const MATURE_INTERVAL = 21;
 const MAX_INTERVAL = 4096;
@@ -18,6 +19,12 @@ const PHASE = { LEARNING: 0, RELEARNING: 1, REVIEW: 2 };
 const RATING = { HARD: 0, GOOD: 1, EASY: 2 };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+function normalizeBatchSize(value) {
+  const n = Math.trunc(Number(value));
+  if (!Number.isFinite(n)) return BATCH_SIZE;
+  return clamp(n, MIN_BATCH_SIZE, BATCH_SIZE);
+}
 
 // FNV-1a over UTF-8 bytes of prompt + '\t' + answer, uint32 wrap-around.
 function hashCard(prompt, answer) {
@@ -348,11 +355,11 @@ function updateStudyStreak(state, nowMs = Date.now()) {
 
 // ---- Batch handling ----
 
-function createNextBatch(state, cards) {
+function createNextBatch(state, cards, requestedBatchSize = BATCH_SIZE) {
   state.batch = [];
   if (cards.length === 0) return;
   const total = cards.length;
-  const batchSize = Math.min(BATCH_SIZE, total);
+  const batchSize = Math.min(normalizeBatchSize(requestedBatchSize), total);
   const start = state.nextBatchStartOffset % total;
   for (let i = 0; i < batchSize; i++) {
     state.batch.push({ key: cards[(start + i) % total].key, processed: 0 });
@@ -364,12 +371,13 @@ function isBatchComplete(state) {
   return state.batch.length > 0 && state.batch.every((b) => b.processed !== 0);
 }
 
-function restoreOrCreateBatch(state, cards) {
+function restoreOrCreateBatch(state, cards, requestedBatchSize = BATCH_SIZE) {
   if (cards.length === 0) {
     state.batch = [];
     state.currentKey = null;
     return;
   }
+  const batchSize = normalizeBatchSize(requestedBatchSize);
   state.nextBatchStartOffset = state.nextBatchStartOffset % cards.length;
   const keyExists = new Set(cards.map((c) => c.key));
   const restored = [];
@@ -377,10 +385,10 @@ function restoreOrCreateBatch(state, cards) {
     if (!keyExists.has(b.key)) continue;
     if (restored.some((r) => r.key === b.key)) continue;
     restored.push({ key: b.key, processed: b.processed ? 1 : 0 });
-    if (restored.length >= BATCH_SIZE) break;
+    if (restored.length >= batchSize) break;
   }
   state.batch = restored;
-  if (state.batch.length === 0 || isBatchComplete(state)) createNextBatch(state, cards);
+  if (state.batch.length === 0 || isBatchComplete(state)) createNextBatch(state, cards, batchSize);
 }
 
 function findNextCardIndex(state, cards, includeFutureCards) {
@@ -412,22 +420,24 @@ function findNextCardIndex(state, cards, includeFutureCards) {
   return bestIndex;
 }
 
-function selectNextCard(state, cards, includeFutureCards) {
+function selectNextCard(state, cards, includeFutureCards, requestedBatchSize = BATCH_SIZE) {
   if (cards.length === 0) {
     state.currentKey = null;
     return;
   }
-  if (state.batch.length === 0) restoreOrCreateBatch(state, cards);
-  if (isBatchComplete(state)) createNextBatch(state, cards);
+  const batchSize = normalizeBatchSize(requestedBatchSize);
+  if (state.batch.length === 0) restoreOrCreateBatch(state, cards, batchSize);
+  if (isBatchComplete(state)) createNextBatch(state, cards, batchSize);
   const idx = findNextCardIndex(state, cards, includeFutureCards);
   state.currentKey = idx >= 0 ? cards[idx].key : null;
 }
 
 // Mirrors rateCurrentCard(): rating semantics are device buttons Hard/Good/Easy.
 // A batch entry is only marked processed by an EASY rating.
-function rateCard(state, cards, key, rating, nowMs = Date.now()) {
+function rateCard(state, cards, key, rating, nowMs = Date.now(), requestedBatchSize = BATCH_SIZE) {
   const card = cards.find((c) => c.key === key);
   if (!card) return false;
+  const batchSize = normalizeBatchSize(requestedBatchSize);
 
   const rec = findOrCreateRecord(state, key);
   state.reviewStep = (state.reviewStep + 1) >>> 0;
@@ -446,10 +456,10 @@ function rateCard(state, cards, key, rating, nowMs = Date.now()) {
       break;
     }
   }
-  if (isBatchComplete(state)) createNextBatch(state, cards);
+  if (isBatchComplete(state)) createNextBatch(state, cards, batchSize);
 
-  selectNextCard(state, cards, false);
-  if (state.currentKey == null) selectNextCard(state, cards, true);
+  selectNextCard(state, cards, false, batchSize);
+  if (state.currentKey == null) selectNextCard(state, cards, true, batchSize);
   return true;
 }
 
@@ -522,11 +532,13 @@ module.exports = {
   PROGRESS_VERSION,
   MAX_FLASHCARDS_TOTAL,
   BATCH_SIZE,
+  MIN_BATCH_SIZE,
   LEARNING_STEPS,
   MATURE_INTERVAL,
   PHASE,
   RATING,
   hashCard,
+  normalizeBatchSize,
   asciiTrim,
   naturalCompare,
   parseDeckFiles,

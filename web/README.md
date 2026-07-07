@@ -13,7 +13,8 @@ The scheduling engine (`engine.js`) is an exact port of
   renames/moves and is what makes device<->web merge possible.
 - SM-2++: learning steps {1, 8, 48} measured in *review steps* (not days),
   Hard/Good/Easy ratings, ease 1.30–3.00, interval cap 4096, deterministic
-  interval fuzz, batches of 20 where only **Easy** marks a card processed.
+  interval fuzz, configurable web batches of 1-20 cards, where only **Easy**
+  marks a card processed.
 - Progress binary: byte-compatible with `/.crosspoint/flashcards_<deck>.bin`
   (version 6) — the test suite round-trips a real device file byte-identically.
 
@@ -47,6 +48,7 @@ API_TOKEN=secret DATA_DIR=/data PORT=8080 node server.js
 - `GET /api/decks/:deck` — deck view incl. current card
 - `POST /api/decks/:deck/rate` `{key, rating: hard|good|easy}` — rate + advance
 - `GET/PUT/DELETE /api/decks/:deck/files[/:name]` — deck TXT files
+- `GET/POST /api/settings` — web app settings, including `batchSize` (1-20)
 - `POST /api/sync/:deck/progress` `{bin: base64|null}` — merge the device's
   progress bin with web state; returns the merged bin to write back
 - `GET /api/decks/:deck/progress.bin` — current web state as a device bin

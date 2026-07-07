@@ -40,27 +40,6 @@ API_TOKEN=secret DATA_DIR=/data PORT=8080 node server.js
   the IP for 15 minutes). Scripts keep using the Bearer token directly.
 - `DATA_DIR` — persistent storage (Railway volume). Layout:
   `decks/<deck>/files/*.txt` + `decks/<deck>/progress.json`.
-- `PUBLIC_URL` — optional public app URL used in phone notifications.
-- `PUSHOVER_API_TOKEN`, `PUSHOVER_USER_KEY`, `PUSHOVER_DEVICE` — optional
-  server-side defaults for study notifications. They can also be saved from
-  the web app's Notifications screen.
-
-## Phone Study Notifications
-
-The web app can notify your phone through Pushover when cards are due. Open the
-app, go to **Notifications**, enable study notifications, enter the Pushover app
-token and user key, then use **Send test**. **Send due** sends one reminder for
-the current due cards.
-
-Automatic reminders run only from the web app server:
-
-- after deck files are uploaded, changed, or deleted in the web UI;
-- after the device syncs progress into the web app;
-- once per day at the configured daily time, if set.
-
-The app de-duplicates the current due-card set so the same sync or file change
-does not repeatedly notify your phone. The due calculation uses the same
-review-step scheduler as the device, not wall-clock card due dates.
 
 ### API
 
@@ -68,9 +47,6 @@ review-step scheduler as the device, not wall-clock card due dates.
 - `GET /api/decks/:deck` — deck view incl. current card
 - `POST /api/decks/:deck/rate` `{key, rating: hard|good|easy}` — rate + advance
 - `GET/PUT/DELETE /api/decks/:deck/files[/:name]` — deck TXT files
-- `GET/POST /api/notifications/settings` — Pushover reminder settings
-- `POST /api/notifications/test` — send a test phone notification
-- `POST /api/notifications/due` `{force?: true}` — send/check due-card reminder
 - `POST /api/sync/:deck/progress` `{bin: base64|null}` — merge the device's
   progress bin with web state; returns the merged bin to write back
 - `GET /api/decks/:deck/progress.bin` — current web state as a device bin

@@ -4,7 +4,6 @@
 // Zero runtime dependencies; state lives as plain files under DATA_DIR.
 
 const http = require('node:http');
-const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -16,10 +15,6 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const API_TOKEN = process.env.API_TOKEN || '';
 const PIN = process.env.PIN || ''; // optional short unlock code for the browser UI
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
-const PUSHOVER_MESSAGES_URL = 'https://api.pushover.net/1/messages.json';
-const NOTIFICATION_SETTINGS_FILE = path.join(DATA_DIR, 'notifications.json');
-const NOTIFICATION_TIMER_MS = 30 * 1000;
 
 // PIN brute-force lockout: 5 wrong attempts per IP -> 15 min lock.
 const pinAttempts = new Map(); // ip -> {fails, lockUntil}
@@ -136,120 +131,6 @@ function clearTombstone(deck, name) {
   saveState(deck, loadState(deck) || engine.newDeckState(), { tombstones });
 }
 
-function loadNotificationSettingsRaw() {
-  if (!fs.existsSync(NOTIFICATION_SETTINGS_FILE)) {
-    return {
-      enabled: false,
-      message: 'Time to study your CrossPoint flashcards',
-      dailyTime: '',
-      pushoverApiToken: '',
-      pushoverUserKey: '',
-      pushoverDevice: '',
-      lastDueSignature: '',
-      lastDueAt: '',
-      lastDailyDate: '',
-    };
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(NOTIFICATION_SETTINGS_FILE, 'utf8'));
-    return {
-      enabled: !!raw.enabled,
-      message: typeof raw.message === 'string' ? raw.message : 'Time to study your CrossPoint flashcards',
-      dailyTime: typeof raw.dailyTime === 'string' ? raw.dailyTime : '',
-      pushoverApiToken: typeof raw.pushoverApiToken === 'string' ? raw.pushoverApiToken : '',
-      pushoverUserKey: typeof raw.pushoverUserKey === 'string' ? raw.pushoverUserKey : '',
-      pushoverDevice: typeof raw.pushoverDevice === 'string' ? raw.pushoverDevice : '',
-      lastDueSignature: typeof raw.lastDueSignature === 'string' ? raw.lastDueSignature : '',
-      lastDueAt: typeof raw.lastDueAt === 'string' ? raw.lastDueAt : '',
-      lastDailyDate: typeof raw.lastDailyDate === 'string' ? raw.lastDailyDate : '',
-    };
-  } catch {
-    return {
-      enabled: false,
-      message: 'Time to study your CrossPoint flashcards',
-      dailyTime: '',
-      pushoverApiToken: '',
-      pushoverUserKey: '',
-      pushoverDevice: '',
-      lastDueSignature: '',
-      lastDueAt: '',
-      lastDailyDate: '',
-    };
-  }
-}
-
-function saveNotificationSettingsRaw(settings) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  atomicWrite(NOTIFICATION_SETTINGS_FILE, JSON.stringify(settings, null, 1));
-}
-
-function effectiveNotificationSettings() {
-  const raw = loadNotificationSettingsRaw();
-  return {
-    ...raw,
-    pushoverApiToken: process.env.PUSHOVER_API_TOKEN || raw.pushoverApiToken,
-    pushoverUserKey: process.env.PUSHOVER_USER_KEY || raw.pushoverUserKey,
-    pushoverDevice: process.env.PUSHOVER_DEVICE || raw.pushoverDevice,
-  };
-}
-
-function publicNotificationSettings() {
-  const raw = loadNotificationSettingsRaw();
-  const effective = effectiveNotificationSettings();
-  return {
-    enabled: raw.enabled,
-    message: raw.message,
-    dailyTime: raw.dailyTime,
-    pushoverApiToken: effective.pushoverApiToken ? '********' : '',
-    pushoverUserKey: effective.pushoverUserKey ? '********' : '',
-    pushoverDevice: effective.pushoverDevice,
-    hasPushoverApiToken: !!effective.pushoverApiToken,
-    hasPushoverUserKey: !!effective.pushoverUserKey,
-    env: {
-      pushoverApiToken: !!process.env.PUSHOVER_API_TOKEN,
-      pushoverUserKey: !!process.env.PUSHOVER_USER_KEY,
-      pushoverDevice: !!process.env.PUSHOVER_DEVICE,
-    },
-    lastDueAt: raw.lastDueAt || '',
-    lastDailyDate: raw.lastDailyDate || '',
-  };
-}
-
-function validDailyTime(value) {
-  return value === '' || /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
-}
-
-function truncateString(value, max) {
-  const text = String(value || '');
-  return text.length <= max ? text : text.slice(0, max);
-}
-
-function applyNotificationSettingsUpdate(body) {
-  const settings = loadNotificationSettingsRaw();
-  if (Object.prototype.hasOwnProperty.call(body, 'enabled')) settings.enabled = !!body.enabled;
-  if (Object.prototype.hasOwnProperty.call(body, 'message')) {
-    settings.message = truncateString(body.message, 240).trim() || 'Time to study your CrossPoint flashcards';
-  }
-  if (Object.prototype.hasOwnProperty.call(body, 'dailyTime')) {
-    const dailyTime = truncateString(body.dailyTime, 5).trim();
-    if (!validDailyTime(dailyTime)) throw new Error('dailyTime must be HH:MM or empty');
-    settings.dailyTime = dailyTime;
-  }
-  if (Object.prototype.hasOwnProperty.call(body, 'pushoverApiToken')) {
-    const value = truncateString(body.pushoverApiToken, 128).trim();
-    if (value !== '********') settings.pushoverApiToken = value;
-  }
-  if (Object.prototype.hasOwnProperty.call(body, 'pushoverUserKey')) {
-    const value = truncateString(body.pushoverUserKey, 128).trim();
-    if (value !== '********') settings.pushoverUserKey = value;
-  }
-  if (Object.prototype.hasOwnProperty.call(body, 'pushoverDevice')) {
-    settings.pushoverDevice = truncateString(body.pushoverDevice, 64).trim();
-  }
-  saveNotificationSettingsRaw(settings);
-  return publicNotificationSettings();
-}
-
 // Load deck (cards + state), reconciling like the firmware's loadDeck():
 // records exist for every card, batch restored/filtered, current card selected.
 function openDeck(deck) {
@@ -363,205 +244,6 @@ function deckView(deckId) {
   };
 }
 
-function collectDueStudySummary() {
-  const hash = crypto.createHash('sha256');
-  const decks = [];
-  let totalDue = 0;
-  let firstDue = null;
-
-  for (const deckDef of DECKS) {
-    const { cards, state } = openDeck(deckDef.id);
-    const cardByKey = new Map(cards.map((c) => [c.key, c]));
-    const recByKey = new Map(state.records.map((r) => [r.key, r]));
-    const dueCards = [];
-
-    for (const batchEntry of state.batch) {
-      if (batchEntry.processed) continue;
-      const card = cardByKey.get(batchEntry.key);
-      if (!card) continue;
-      const record = recByKey.get(batchEntry.key);
-      if (!record || record.dueStep <= state.reviewStep) dueCards.push(card);
-    }
-
-    if (dueCards.length === 0) continue;
-    const deckDue = {
-      deck: deckDef.id,
-      label: deckDef.label,
-      dueNow: dueCards.length,
-      firstCard: dueCards[0],
-      reviewStep: state.reviewStep,
-    };
-    decks.push(deckDue);
-    totalDue += dueCards.length;
-    if (!firstDue) firstDue = deckDue;
-
-    hash.update(deckDef.id);
-    hash.update(':');
-    hash.update(String(state.reviewStep));
-    hash.update(':');
-    for (const card of dueCards) {
-      hash.update(String(card.key >>> 0));
-      hash.update(',');
-    }
-    hash.update(';');
-  }
-
-  return {
-    totalDue,
-    decks,
-    firstDue,
-    signature: totalDue > 0 ? hash.digest('hex') : '',
-  };
-}
-
-function localDateKey(now = new Date()) {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function localTimeKey(now = new Date()) {
-  const h = String(now.getHours()).padStart(2, '0');
-  const m = String(now.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
-}
-
-function buildNotificationMessage(settings, summary, overrideMessage = '') {
-  let message = truncateString(overrideMessage || settings.message || 'Time to study your CrossPoint flashcards', 900);
-  if (summary && summary.totalDue > 0) {
-    message += ` (${summary.totalDue} card${summary.totalDue === 1 ? '' : 's'} due)`;
-    if (summary.firstDue && summary.firstDue.firstCard) {
-      message += `\n${summary.firstDue.label}: ${truncateString(summary.firstDue.firstCard.prompt, 160)}`;
-    }
-  }
-  return truncateString(message, 900);
-}
-
-function pushoverUrlForSummary(summary) {
-  if (!PUBLIC_URL || !summary || !summary.firstDue) return '';
-  return `${PUBLIC_URL}/#/deck/${encodeURIComponent(summary.firstDue.deck)}`;
-}
-
-function sendPushover(settings, payload) {
-  return new Promise((resolve, reject) => {
-    if (!settings.pushoverApiToken || !settings.pushoverUserKey) {
-      reject(new Error('Pushover API token or user key is missing'));
-      return;
-    }
-
-    const form = new URLSearchParams();
-    form.set('token', settings.pushoverApiToken);
-    form.set('user', settings.pushoverUserKey);
-    form.set('title', payload.title || 'CrossPoint Cards');
-    form.set('message', payload.message);
-    if (settings.pushoverDevice) form.set('device', settings.pushoverDevice);
-    if (payload.url) {
-      form.set('url', payload.url);
-      form.set('url_title', payload.urlTitle || 'Open CrossPoint Cards');
-    }
-
-    const body = form.toString();
-    const target = new URL(PUSHOVER_MESSAGES_URL);
-    const req = https.request(
-      target,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(body),
-          'User-Agent': 'crosspoint-flashcards-web',
-        },
-      },
-      (res) => {
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => {
-          const responseText = Buffer.concat(chunks).toString('utf8');
-          if (res.statusCode === 200) resolve({ statusCode: res.statusCode, body: responseText });
-          else reject(new Error(`Pushover request failed (${res.statusCode}): ${responseText}`));
-        });
-      },
-    );
-    req.on('error', reject);
-    req.end(body);
-  });
-}
-
-async function sendTestNotification() {
-  const settings = effectiveNotificationSettings();
-  if (!settings.pushoverApiToken || !settings.pushoverUserKey) {
-    return { ok: false, status: 'missing_credentials', message: 'Pushover API token or user key is missing' };
-  }
-  await sendPushover(settings, {
-    title: 'CrossPoint Cards',
-    message: 'Test notification from CrossPoint Cards',
-    url: PUBLIC_URL || '',
-    urlTitle: 'Open CrossPoint Cards',
-  });
-  return { ok: true, status: 'sent', message: 'Test notification sent' };
-}
-
-function persistNotificationDelivery(summary, dailyDate = '') {
-  const settings = loadNotificationSettingsRaw();
-  settings.lastDueSignature = summary.signature;
-  settings.lastDueAt = new Date().toISOString();
-  if (dailyDate) settings.lastDailyDate = dailyDate;
-  saveNotificationSettingsRaw(settings);
-}
-
-async function sendDueStudyNotification({ force = false, dailyDate = '', reason = 'manual' } = {}) {
-  const raw = loadNotificationSettingsRaw();
-  const settings = effectiveNotificationSettings();
-  if (!settings.enabled) return { ok: false, status: 'disabled', message: 'Study notifications are disabled' };
-  if (!settings.pushoverApiToken || !settings.pushoverUserKey) {
-    return { ok: false, status: 'missing_credentials', message: 'Pushover API token or user key is missing' };
-  }
-
-  const summary = collectDueStudySummary();
-  if (summary.totalDue === 0) {
-    return { ok: true, status: 'no_due_cards', message: 'No due flashcards found', summary };
-  }
-
-  if (!force && dailyDate && raw.lastDailyDate === dailyDate) {
-    return { ok: true, status: 'already_sent', message: 'Daily reminder already sent', summary };
-  }
-  if (!force && !dailyDate && raw.lastDueSignature === summary.signature) {
-    return { ok: true, status: 'already_sent', message: 'Reminder already sent for current due cards', summary };
-  }
-
-  await sendPushover(settings, {
-    title: 'CrossPoint Study Reminder',
-    message: buildNotificationMessage(settings, summary),
-    url: pushoverUrlForSummary(summary),
-    urlTitle: 'Study now',
-  });
-  persistNotificationDelivery(summary, dailyDate);
-  return { ok: true, status: 'sent', message: 'Due-card reminder sent', reason, summary };
-}
-
-function triggerDueNotification(reason) {
-  sendDueStudyNotification({ reason }).then((result) => {
-    if (result.status === 'sent') console.log(`study notification sent (${reason})`);
-  }).catch((err) => {
-    console.warn(`study notification failed (${reason}): ${err.message}`);
-  });
-}
-
-function scheduledNotificationTick() {
-  const settings = loadNotificationSettingsRaw();
-  if (!settings.enabled || !settings.dailyTime) return;
-  const now = new Date();
-  if (localTimeKey(now) !== settings.dailyTime) return;
-  const today = localDateKey(now);
-  if (settings.lastDailyDate === today) return;
-  sendDueStudyNotification({ dailyDate: today, reason: 'daily' }).then((result) => {
-    if (result.status === 'sent') console.log(`daily study notification sent for ${today}`);
-  }).catch((err) => {
-    console.warn(`daily study notification failed: ${err.message}`);
-  });
-}
-
 // ---- HTTP plumbing ----
 
 function send(res, status, body, headers = {}) {
@@ -660,48 +342,6 @@ async function handleApi(req, res, url) {
 
   if (!authorized(req, url)) return send(res, 401, { error: 'unauthorized' });
 
-  // GET/POST /api/notifications/settings
-  if (parts.length === 3 && parts[1] === 'notifications' && parts[2] === 'settings') {
-    if (req.method === 'GET') return send(res, 200, publicNotificationSettings());
-    if (req.method === 'POST') {
-      try {
-        const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
-        return send(res, 200, applyNotificationSettingsUpdate(body));
-      } catch (err) {
-        return send(res, 400, { error: String(err.message || err) });
-      }
-    }
-  }
-
-  // POST /api/notifications/test
-  if (parts.length === 3 && parts[1] === 'notifications' && parts[2] === 'test' && req.method === 'POST') {
-    try {
-      const result = await sendTestNotification();
-      const statusCode = result.status === 'missing_credentials' ? 400 : 200;
-      if (statusCode >= 400) result.error = result.message;
-      return send(res, statusCode, result);
-    } catch (err) {
-      return send(res, 502, { ok: false, status: 'notification_failed', error: String(err.message || err) });
-    }
-  }
-
-  // POST /api/notifications/due
-  if (parts.length === 3 && parts[1] === 'notifications' && parts[2] === 'due' && req.method === 'POST') {
-    let body = {};
-    try {
-      if (req.headers['content-length'] !== '0') {
-        body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
-      }
-      const force = body.force === true || url.searchParams.get('force') === '1';
-      const result = await sendDueStudyNotification({ force, reason: 'manual' });
-      const statusCode = result.status === 'missing_credentials' ? 400 : 200;
-      if (statusCode >= 400) result.error = result.message;
-      return send(res, statusCode, result);
-    } catch (err) {
-      return send(res, 502, { ok: false, status: 'notification_failed', error: String(err.message || err) });
-    }
-  }
-
   // GET /api/decks
   if (parts.length === 2 && parts[1] === 'decks' && req.method === 'GET') {
     return send(res, 200, DECKS.map(deckSummary));
@@ -747,7 +387,6 @@ async function handleApi(req, res, url) {
       atomicWrite(file, body);
       clearTombstone(deck, name);
       openDeck(deck); // reconcile records/batch with the new card set
-      triggerDueNotification(`file update:${deck}`);
       return send(res, 200, { ok: true, name, size: body.length });
     }
     if (req.method === 'DELETE') {
@@ -756,7 +395,6 @@ async function handleApi(req, res, url) {
         addTombstone(deck, name); // so the device drops its copy instead of re-uploading
       }
       openDeck(deck);
-      triggerDueNotification(`file delete:${deck}`);
       return send(res, 200, { ok: true });
     }
   }
@@ -789,7 +427,6 @@ async function handleApi(req, res, url) {
     const merged = engine.mergeDeckStates(webState, deviceState);
     if (merged) saveState(syncDeck, merged, { lastDeviceSyncAt: new Date().toISOString() });
     else saveState(syncDeck, engine.newDeckState(), { lastDeviceSyncAt: new Date().toISOString() });
-    triggerDueNotification(`device sync:${syncDeck}`);
 
     // Don't push never-studied (pristine) state to the device — it would just
     // burn flash writes for decks that have no review history anywhere.
@@ -812,8 +449,6 @@ async function handleApi(req, res, url) {
 }
 
 ensureDirs();
-const notificationTimer = setInterval(scheduledNotificationTick, NOTIFICATION_TIMER_MS);
-if (notificationTimer.unref) notificationTimer.unref();
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -828,6 +463,4 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`crosspoint-flashcards-web listening on :${PORT}, data dir ${DATA_DIR}, auth ${API_TOKEN ? 'on' : 'OFF'}`);
-  const startupTimer = setTimeout(() => triggerDueNotification('server start'), 1000);
-  if (startupTimer.unref) startupTimer.unref();
 });

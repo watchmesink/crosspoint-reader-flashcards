@@ -1,6 +1,6 @@
 ---
 name: crosspoint-quizlet-sync
-description: Build Quizlet-compatible flashcard TXT files for a CrossPoint device and the companion flashcards web app from German, Ukrainian, or English vocabulary, explicit term-translation pairs, or short vocab lists pasted directly into chat. Use when the agent should turn study words into dated deck files, route them into the correct fixed deck folder by language, optionally auto-translate or normalize obvious typos, save local .txt files, and upload them to the CrossPoint device and/or the web app. Also use when the user asks to sync flashcards/learning progress between the device and the web app (run with --sync-only).
+description: Build Quizlet-compatible flashcard TXT files for a CrossPoint device and the companion flashcards web app from German, Ukrainian, or English vocabulary, explicit term-translation pairs, short vocab lists pasted directly into chat, or words looked up in a Kindle's Vocabulary Builder (system/vocabulary/vocab.db). Use when the agent should turn study words into dated deck files, route them into the correct fixed deck folder by language, optionally auto-translate or normalize obvious typos, save local .txt files, and upload them to the CrossPoint device and/or the web app. Also use to import Kindle looked-up words (run scripts/kindle_vocab_sync.py), or when the user asks to sync flashcards/learning progress between the device and the web app (run with --sync-only).
 ---
 
 # CrossPoint Quizlet Sync
@@ -74,9 +74,23 @@ python3 scripts/quizlet_sync.py \
 
 `quizlet_sync.py` automatically runs one sync pass (via `web/agent/sync_agent.py`) after uploading decks; run `--sync-only` for a pure sync. Per deck: TXT files travel both directions (deletions propagate, device wins conflicts) and SM-2++ progress is merged (the more-reviewed record per card wins), written back only when changed. Idempotent. See `web/README.md` for details.
 
-## Telegram Bot
+## Import from Kindle Vocabulary Builder
 
-Use `scripts/telegram_flashcards_bot.py` to queue words from Telegram and export explicit pairs later (`TELEGRAM_BOT_TOKEN` env). Plain messages queue per chat; `/pending` shows the queue; `/export` sends back a Markdown file of `term<TAB>translation` pairs grouped by deck; `/clear` empties the queue.
+Use `scripts/kindle_vocab_sync.py` to pull the words you look up while reading on a Kindle into your decks. Kindle stores every looked-up word in a small SQLite DB (`system/vocabulary/vocab.db`); this script reads the words added since its last run, routes each to a deck by Kindle's own language tag, and hands them to `quizlet_sync.py` (which auto-translates the single terms and uploads). Some lag is fine — run it whenever the Kindle is plugged in.
+
+```bash
+python3 scripts/kindle_vocab_sync.py               # detect a mounted Kindle, import new words
+python3 scripts/kindle_vocab_sync.py --emit-only   # preview the deck-tagged lines, no upload
+python3 scripts/kindle_vocab_sync.py --all         # re-import every word (ignore saved state)
+python3 scripts/kindle_vocab_sync.py --db /path/to/vocab.db   # explicit DB path
+```
+
+- **DB discovery:** autodetects a mounted Kindle (`/Volumes/Kindle*/system/vocabulary/vocab.db`), else `KINDLE_VOCAB_DB` env, else `--db`, else `~/.crosspoint_sync/vocab.db` (handy: copy the file off the Kindle once). Opened read-only.
+- **Incremental:** tracks the newest `WORDS.timestamp` it processed in `~/.crosspoint_sync/kindle_state.json`, so each run only imports words looked up since. State advances only when the upload succeeds (a sleeping device still counts as success — the web upload is what matters).
+- **Routing:** Kindle `lang` → deck (`de`→German, `uk`→Ukrainian, `en`→English via `[[deck:…]]` hints). Words in other languages are skipped and counted.
+- **Word form:** `--word-field stem` (default, dictionary base form, e.g. *ging*→*gehen*) or `--word-field word` (exact selected form).
+- **Credentials/host** resolve like `sync_agent.py`: env `CROSSPOINT_WEB` / `CROSSPOINT_WEB_TOKEN` / `CROSSPOINT_DEVICE`, then `~/.crosspoint_sync/config.json` (`web` / `web_token` / `device`). Pass-through flags: `--no-device`, `--no-web-upload`, `--no-sync`, `--dry-run`.
+- **Automatic (optional):** `scripts/com.crosspoint.kindle-vocab-sync.plist` is an event-driven launchd agent that runs one import whenever a volume mounts (i.e. when you plug in the Kindle) — no polling, no background drain. Edit the script path, then bootstrap it (see comments in the plist).
 
 ## Notes
 

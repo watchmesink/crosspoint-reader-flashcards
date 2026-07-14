@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Optional: import Kindle Vocabulary Builder words automatically whenever a Kindle
+  is plugged in. This is EVENT-DRIVEN (fires on any volume mount, not polling), so
+  it does not run in the background or drain anything between mounts. The script
+  no-ops quickly when no Kindle is present.
+
+  Install:
+    1) Edit __SCRIPT_PATH__ below to the absolute path of kindle_vocab_sync.py.
+    2) Ensure ~/.crosspoint_sync/config.json has web / web_token / device (mode 600),
+       OR add CROSSPOINT_WEB / CROSSPOINT_WEB_TOKEN / CROSSPOINT_DEVICE under
+       EnvironmentVariables here.
+    3) cp this file to ~/Library/LaunchAgents/com.crosspoint.kindle-vocab-sync.plist
+       launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.crosspoint.kindle-vocab-sync.plist
+    Uninstall: launchctl bootout gui/$UID/com.crosspoint.kindle-vocab-sync
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.crosspoint.kindle-vocab-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__SCRIPT_PATH__</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>/Volumes</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/crosspoint-kindle-vocab-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/crosspoint-kindle-vocab-sync.log</string>
+</dict>
+</plist>

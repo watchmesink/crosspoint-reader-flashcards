@@ -57,7 +57,7 @@ class SyncSummary:
 DECKS: Dict[str, DeckConfig] = {
     "german": DeckConfig("german", "German", "german", "de", "en"),
     "ukrainian": DeckConfig("ukrainian", "Ukrainian", "ukrainian", "uk", "en"),
-    "english": DeckConfig("english", "English", "english", "en", "de"),
+    "english": DeckConfig("english", "English", "english", "en", "ru"),
 }
 
 GERMAN_WORDS = {

@@ -42,6 +42,8 @@ A zero-dependency Node.js server + mobile-first, **offline-first** PWA that mirr
 
 A skill for coding agents (Claude Code / Codex style) that turns vocabulary pasted into chat into dated Quizlet-style deck files, routes each card to the right deck by language detection (optionally auto-translating single terms), uploads to both the device and the web app, and triggers a sync. Includes an optional Telegram bot for collecting words on the go, and a **Kindle Vocabulary Builder importer** (`scripts/kindle_vocab_sync.py`) that pulls the words you look up while reading on a Kindle (its `vocab.db`) into your decks — incrementally, routed by language, translated, and uploaded on the same pipeline. Plug in the Kindle and run it (or use the optional on-mount launchd agent).
 
+Auto-translation targets are per deck: **German → English**, **Ukrainian → English**, **English → Russian**. Each is overridable with `CROSSPOINT_<DECK>_TARGET_LANG` (e.g. `CROSSPOINT_ENGLISH_TARGET_LANG=de` to get English → German instead).
+
 ### 🛠 Versioned builds
 
 Each build stamps an auto-incrementing `CROSSPOINT_VERSION` and exports the firmware as `<version>-firmware.bin` in the project root, ready to flash.

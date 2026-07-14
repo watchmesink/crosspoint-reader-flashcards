@@ -51,7 +51,7 @@ python3 scripts/quizlet_sync.py \
 - Web upload happens automatically when `CROSSPOINT_WEB` + `CROSSPOINT_WEB_TOKEN` are set. Disable with `--no-web-upload`.
 - If the device is asleep but the web upload succeeded, the script warns instead of failing — the next sync pass pushes the file to the device.
 - Local files are written to `OUTPUT_DIR/<deck>/<prefix>-YYYY-MM-DD.txt`, then `-2`, `-3`, and so on if needed.
-- Default auto-translation targets: German -> English, Ukrainian -> English, English -> German. Override per deck with `CROSSPOINT_<DECK>_TARGET_LANG`.
+- Default auto-translation targets: German -> English, Ukrainian -> English, English -> Russian. Override per deck with `CROSSPOINT_<DECK>_TARGET_LANG`.
 
 5. Confirm the result.
 - Report every local file path that was created.

@@ -1,0 +1,13 @@
+# CrossPoint Kindle vocab sync — config for upload_vocab.sh (runs on the Kindle).
+# Copy to vocab_sync.conf (next to upload_vocab.sh) or /mnt/us/vocab_sync.conf.
+
+# Web app base URL (your Railway deployment running web/server.js):
+WEB_URL="https://crosspoint-flashcards-production.up.railway.app"
+
+# Web app API token (the server's API_TOKEN):
+WEB_TOKEN="REPLACE_WITH_API_TOKEN"
+
+# Optional overrides:
+# VOCAB_DB="/mnt/us/system/vocabulary/vocab.db"
+# LOG_FILE="/mnt/us/vocab_sync.log"
+# HTTP_TIMEOUT="120"

@@ -90,7 +90,17 @@ python3 scripts/kindle_vocab_sync.py --db /path/to/vocab.db   # explicit DB path
 - **Routing:** Kindle `lang` → deck (`de`→German, `uk`→Ukrainian, `en`→English via `[[deck:…]]` hints). Words in other languages are skipped and counted.
 - **Word form:** `--word-field stem` (default, dictionary base form, e.g. *ging*→*gehen*) or `--word-field word` (exact selected form).
 - **Credentials/host** resolve like `sync_agent.py`: env `CROSSPOINT_WEB` / `CROSSPOINT_WEB_TOKEN` / `CROSSPOINT_DEVICE`, then `~/.crosspoint_sync/config.json` (`web` / `web_token` / `device`). Pass-through flags: `--no-device`, `--no-web-upload`, `--no-sync`, `--dry-run`.
-- **Automatic (optional):** `scripts/com.crosspoint.kindle-vocab-sync.plist` is an event-driven launchd agent that runs one import whenever a volume mounts (i.e. when you plug in the Kindle) — no polling, no background drain. Edit the script path, then bootstrap it (see comments in the plist).
+- **Automatic on a Mac (optional):** `scripts/com.crosspoint.kindle-vocab-sync.plist` is an event-driven launchd agent that runs one import whenever a volume mounts (i.e. when you plug in the Kindle) — no polling, no background drain. Edit the script path, then bootstrap it (see comments in the plist).
+
+This whole section needs the `vocab.db` reachable from the machine running the script (USB mount, or a copied file). For a **fully hands-free setup — no USB and no manual run at all** — see the next section.
+
+### Fully wireless & automatic (no USB, no manual run)
+
+See [`kindle-device/`](./kindle-device/). The web app exposes `POST /api/kindle/vocab`: a **jailbroken** Kindle uploads its raw `vocab.db` over WiFi (via `kindle-device/upload_vocab.sh`, run from `cron` on the Kindle), and the server (`web/server.js`) parses new `WORDS` with the `sqlite3` CLI, translates them, and files them into the decks — the same result as the script above, but the Kindle pushes the data itself.
+
+- Requires a **jailbroken Kindle** (KUAL + cron). Amazon keeps `vocab.db` device-local with no cloud/API, so on-device code is the only wireless way to read Vocabulary Builder.
+- Server is incremental (watermark in `DATA_DIR/kindle/state.json`), dedups by term, and needs the `sqlite3` CLI (installed by `web/nixpacks.toml` on Railway). Check progress with `GET /api/kindle/status`.
+- Full install steps (jailbreak, config, cron, OTA) are in `kindle-device/README.md`.
 
 ## Notes
 

@@ -49,6 +49,11 @@ API_TOKEN=secret DATA_DIR=/data PORT=8080 node server.js
 - `POST /api/decks/:deck/rate` `{key, rating: hard|good|easy}` — rate + advance
 - `GET/PUT/DELETE /api/decks/:deck/files[/:name]` — deck TXT files
 - `GET/POST /api/settings` — web app settings, including `batchSize` (1-20)
+- `POST /api/kindle/vocab` — upload a Kindle `vocab.db` (raw body); server reads
+  new looked-up words (via the `sqlite3` CLI), translates them, and files them
+  into the decks. `?wait=1` blocks and returns the ingest summary. See
+  [`../skill/crosspoint-quizlet-sync/kindle-device/`](../skill/crosspoint-quizlet-sync/kindle-device/).
+- `GET /api/kindle/status` — last Kindle-import watermark
 - `POST /api/sync/:deck/progress` `{bin: base64|null}` — merge the device's
   progress bin with web state; returns the merged bin to write back
 - `GET /api/decks/:deck/progress.bin` — current web state as a device bin

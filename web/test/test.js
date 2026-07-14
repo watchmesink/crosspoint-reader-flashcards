@@ -50,6 +50,67 @@ if (realBin && sampleTxt) {
   });
 }
 
+test('PortableBuffer (browser path) LE/utf8/base64 matches Node Buffer', () => {
+  const PB = engine.PortableBuffer;
+  // little-endian integer layout must match Buffer byte-for-byte
+  const pb = PB.alloc(11);
+  pb.writeUInt8(0xab, 0);
+  pb.writeUInt16LE(0xbeef, 1);
+  pb.writeUInt32LE(0xdeadbeef, 3);
+  pb.writeInt32LE(-123456, 7);
+  const nb = Buffer.alloc(11);
+  nb.writeUInt8(0xab, 0);
+  nb.writeUInt16LE(0xbeef, 1);
+  nb.writeUInt32LE(0xdeadbeef, 3);
+  nb.writeInt32LE(-123456, 7);
+  assert.ok(nb.equals(Buffer.from(pb)), 'PortableBuffer byte layout differs from Buffer');
+  assert.strictEqual(pb.readUInt8(0), 0xab);
+  assert.strictEqual(pb.readUInt16LE(1), 0xbeef);
+  assert.strictEqual(pb.readUInt32LE(3), 0xdeadbeef >>> 0);
+  assert.strictEqual(pb.readInt32LE(7), -123456);
+  // utf8 encoding parity (drives hashCard, which only iterates these bytes)
+  for (const s of ['der Hund', 'Grüße über', 'дякую', 'naïve café']) {
+    assert.ok(Buffer.from(s, 'utf8').equals(Buffer.from(PB.from(s, 'utf8'))), `utf8 differs for ${s}`);
+  }
+  // base64 helpers parity (used to ship bins over the sync API)
+  const sample = engine.serializeProgressBin(engine.newDeckState());
+  assert.strictEqual(engine.toBase64(sample), sample.toString('base64'));
+  assert.ok(engine.fromBase64(sample.toString('base64')).equals(sample));
+});
+
+test('parseProgressBin works on the PortableBuffer (browser) path', () => {
+  const cards = mkCards(30);
+  const state = engine.newDeckState();
+  engine.selectNextCard(state, cards, true);
+  const ratings = [engine.RATING.GOOD, engine.RATING.HARD, engine.RATING.EASY];
+  for (let i = 0; i < 25; i++) engine.rateCard(state, cards, state.currentKey, ratings[i % 3]);
+  const nodeBin = engine.serializeProgressBin(state);
+  // Simulate the browser receiving the bytes and parsing via the shim.
+  const viaShim = engine.parseProgressBin(engine.PortableBuffer.from(nodeBin));
+  assert.ok(viaShim, 'shim parse failed');
+  assert.ok(engine.serializeProgressBin(viaShim).equals(nodeBin), 'shim round-trip differs');
+});
+
+test('loadDeck/projectCurrent/countDue reconcile like the server', () => {
+  const files = [{ name: 'a.txt', content: 'der Hund\tthe dog\ndie Katze\tthe cat\nHaus\thouse\n' }];
+  const r1 = engine.loadDeck(files, null);
+  assert.strictEqual(r1.cards.length, 3);
+  assert.ok(r1.changed, 'fresh load should report changed');
+  assert.ok(r1.state.currentKey != null, 'a current card should be selected');
+  const cur = engine.projectCurrent(r1.cards, r1.state);
+  assert.ok(cur && cur.prompt && cur.answer, 'current card projected');
+  assert.strictEqual(cur.batchPosition >= 1, true);
+  // every card is due at reviewStep 0
+  assert.strictEqual(engine.countDue(r1.state), r1.state.batch.filter((b) => !b.processed).length);
+  // reloading the same files against the converged state is a no-op
+  const r2 = engine.loadDeck(files, r1.state);
+  assert.strictEqual(r2.changed, false, 'idempotent reload should not report changed');
+  // rate the current card locally, then a reload keeps the in-progress card
+  engine.rateCard(r1.state, r1.cards, r1.state.currentKey, engine.RATING.GOOD);
+  const r3 = engine.loadDeck(files, r1.state);
+  assert.ok(r3.state.currentKey != null);
+});
+
 test('synthetic full state round-trips byte-identically twice', () => {
   const cards = mkCards(50);
   const state = engine.newDeckState();
@@ -117,6 +178,16 @@ test('batch creation wraps and advances offset', () => {
   assert.strictEqual(state.nextBatchStartOffset, 10);
 });
 
+test('normalizeBatchSize clamps to [1,20] and defaults on non-finite input', () => {
+  assert.strictEqual(engine.normalizeBatchSize(7), 7);
+  assert.strictEqual(engine.normalizeBatchSize(0), 1);
+  assert.strictEqual(engine.normalizeBatchSize(999), 20);
+  assert.strictEqual(engine.normalizeBatchSize(5.9), 5); // truncates toward zero
+  assert.strictEqual(engine.normalizeBatchSize(undefined), 20);
+  assert.strictEqual(engine.normalizeBatchSize(NaN), 20);
+  assert.strictEqual(engine.normalizeBatchSize('abc'), 20);
+});
+
 test('custom batch size creates and restores smaller batches', () => {
   const cards = mkCards(30);
   const state = engine.newDeckState();
@@ -126,7 +197,7 @@ test('custom batch size creates and restores smaller batches', () => {
 
   state.batch = cards.slice(0, 12).map((c) => ({ key: c.key, processed: 0 }));
   engine.restoreOrCreateBatch(state, cards, 5);
-  assert.strictEqual(state.batch.length, 5);
+  assert.strictEqual(state.batch.length, 5); // over-large restored batch truncates to configured size
   assert.deepStrictEqual(state.batch.map((b) => b.key), cards.slice(0, 5).map((c) => c.key));
 });
 
@@ -140,8 +211,15 @@ test('custom batch size is used after a smaller batch completes', () => {
     engine.rateCard(state, cards, state.currentKey, engine.RATING.EASY, Date.now(), 6);
   }
   assert.strictEqual(state.reviewStep, 6);
-  assert.strictEqual(state.batch.length, 6);
+  assert.strictEqual(state.batch.length, 6); // refilled batch keeps the custom size
   assert.strictEqual(state.batch.filter((b) => b.processed).length, 0);
+});
+
+test('loadDeck honors a custom batch size', () => {
+  const files = [{ name: 'a.txt', content: Array.from({ length: 30 }, (_, i) => `p${i}\ta${i}`).join('\n') + '\n' }];
+  const r = engine.loadDeck(files, null, 8);
+  assert.strictEqual(r.cards.length, 30);
+  assert.strictEqual(r.state.batch.length, 8);
 });
 
 test('SM-2++ learning path: good, good, good graduates to review', () => {

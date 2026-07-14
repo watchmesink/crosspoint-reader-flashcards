@@ -1,11 +1,15 @@
 # CrossPoint Flashcards Web
 
-Mobile-first web app that mirrors the flashcards mode of the CrossPoint firmware
-(Xteink X4 e-reader) and keeps decks + learning progress in two-way sync with the
-device.
+Mobile-first, **offline-first** web app that mirrors the flashcards mode of the
+CrossPoint firmware (Xteink X4 e-reader) and keeps decks + learning progress in
+two-way sync with the device. It is an installable PWA: once loaded online it
+studies fully offline (service worker shell + IndexedDB) and reconciles with the
+server whenever the network returns.
 
 The scheduling engine (`engine.js`) is an exact port of
-`src/activities/flashcards/FlashcardsActivity.cpp` (branch `codex/flashcards-0.1.13-push`):
+`src/activities/flashcards/FlashcardsActivity.cpp` and is **isomorphic** — the
+same source runs on the Node server and in the browser (a `Buffer`/`Uint8Array`
+shim keeps the device bin byte-identical either way):
 
 - Decks: `german`, `ukrainian`, `english`; cards are `prompt<TAB>translation`
   lines in `.txt` files (`#` comments, fallback split on last comma).
@@ -22,11 +26,14 @@ The scheduling engine (`engine.js`) is an exact port of
 
 | Path | What it is |
 |---|---|
-| `server.js` | Zero-dependency Node server: REST API + static SPA + progress merge |
-| `engine.js` | Firmware engine port + bin codec + merge |
-| `public/` | Mobile SPA (deck list → deck → study/files), PWA manifest |
+| `server.js` | Zero-dependency Node server: REST API + static shell + progress merge |
+| `engine.js` | Firmware engine port + bin codec + merge — **isomorphic** (Node `Buffer` / browser `Uint8Array` shim) so the server and browser run the same source |
+| `public/index.html` | App shell (markup + styles); loads `/engine.js` + `/app.js` |
+| `public/app.js` | Offline-first client: study/stats/files/settings over IndexedDB via the engine, plus reconcile |
+| `public/sw.js` | Service worker: precaches the shell for offline; never caches `/api/*` |
+| `public/manifest.webmanifest` | PWA manifest |
 | `agent/sync_agent.py` | LAN-side sync agent (device ⇄ web), zero-dep Python |
-| `test/test.js` | Engine tests incl. byte-identical round-trip of a real device bin |
+| `test/test.js` | Engine tests incl. byte-identical round-trip of a real device bin + browser (`PortableBuffer`) parity |
 
 ## Server
 
@@ -40,7 +47,8 @@ API_TOKEN=secret DATA_DIR=/data PORT=8080 node server.js
   and exchanges it for the token via `POST /api/auth` (5 wrong attempts lock
   the IP for 15 minutes). Scripts keep using the Bearer token directly.
 - `DATA_DIR` — persistent storage (Railway volume). Layout:
-  `decks/<deck>/files/*.txt` + `decks/<deck>/progress.json`.
+  `decks/<deck>/files/*.txt` + `decks/<deck>/progress.json`, plus a global
+  `settings.json` (currently just `batchSize`).
 
 ### API
 

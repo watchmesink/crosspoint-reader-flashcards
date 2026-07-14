@@ -32,10 +32,28 @@ import uuid
 from typing import Dict, Optional, Tuple
 
 DECKS = ("german", "ukrainian", "english")
-DEFAULT_DEVICE = os.environ.get("CROSSPOINT_DEVICE", "")
-DEFAULT_WEB = os.environ.get("CROSSPOINT_WEB", "")
-DEFAULT_TOKEN = os.environ.get("CROSSPOINT_WEB_TOKEN", "")
 STATE_PATH = os.path.expanduser(os.environ.get("CROSSPOINT_SYNC_STATE", "~/.crosspoint_sync/state.json"))
+
+# Non-interactive shells (agent sessions) don't load ~/.zshrc, so env vars may
+# be absent; ~/.crosspoint_sync/config.json is the shell-independent fallback.
+CONFIG_PATH = os.path.expanduser(os.environ.get("CROSSPOINT_CONFIG", "~/.crosspoint_sync/config.json"))
+
+
+def _load_config_file() -> Dict[str, str]:
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v) for k, v in data.items() if isinstance(v, (str, int))}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+_CONFIG = _load_config_file()
+DEFAULT_DEVICE = os.environ.get("CROSSPOINT_DEVICE") or _CONFIG.get("device", "")
+DEFAULT_WEB = os.environ.get("CROSSPOINT_WEB") or _CONFIG.get("web", "")
+DEFAULT_TOKEN = os.environ.get("CROSSPOINT_WEB_TOKEN") or _CONFIG.get("web_token", "")
 
 
 def log(msg: str) -> None:

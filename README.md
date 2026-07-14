@@ -32,7 +32,7 @@ Without this file the feature is completely inert and the radio is never touched
 
 ### 📱 Companion web app — [`web/`](./web)
 
-A zero-dependency Node.js server + mobile-first PWA that mirrors the on-device experience: same decks, same batch mechanics, and an **exact port of the SM-2++ engine** (the test suite round-trips a real device progress file byte-identically). Study on your phone, manage deck files, and everything converges with the device on its next sync.
+A zero-dependency Node.js server + mobile-first, **offline-first** PWA that mirrors the on-device experience: same decks, same batch mechanics, and an **exact port of the SM-2++ engine** (the test suite round-trips a real device progress file byte-identically). Once loaded it studies fully offline (service worker shell + IndexedDB, the same engine running in the browser) and reconciles with the server when the network returns. Study on your phone, manage deck files, set the batch size, and everything converges with the device on its next sync.
 
 - Storage is plain files on a volume; deployable on Railway in a few commands (see [`web/README.md`](./web/README.md)).
 - Browser access via a short PIN (exchanged server-side for the API token); scripts authenticate with a Bearer token.

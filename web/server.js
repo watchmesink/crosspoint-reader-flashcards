@@ -12,10 +12,10 @@ const engine = require('./engine');
 
 const PORT = Number(process.env.PORT || 8080);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const APP_SETTINGS_FILE = path.join(DATA_DIR, 'settings.json'); // global app settings (batch size)
 const API_TOKEN = process.env.API_TOKEN || '';
 const PIN = process.env.PIN || ''; // optional short unlock code for the browser UI
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const APP_SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 // PIN brute-force lockout: 5 wrong attempts per IP -> 15 min lock.
 const pinAttempts = new Map(); // ip -> {fails, lockUntil}
@@ -132,14 +132,16 @@ function clearTombstone(deck, name) {
   saveState(deck, loadState(deck) || engine.newDeckState(), { tombstones });
 }
 
+// ---- app settings (single global JSON at DATA_DIR/settings.json) ----
+// Currently just the configurable study batch size; normalized on both read and
+// write so a corrupt/out-of-range value can never reach the engine.
+
 function defaultAppSettings() {
   return { batchSize: engine.BATCH_SIZE };
 }
 
 function normalizeAppSettings(raw) {
-  return {
-    batchSize: engine.normalizeBatchSize(raw && raw.batchSize),
-  };
+  return { batchSize: engine.normalizeBatchSize(raw && raw.batchSize) };
 }
 
 function loadAppSettings() {
@@ -158,6 +160,7 @@ function saveAppSettings(settings) {
   return normalized;
 }
 
+// Shape returned to clients: current value plus the allowed range for the UI.
 function publicAppSettings() {
   const settings = loadAppSettings();
   return {
@@ -175,53 +178,22 @@ function applyAppSettingsUpdate(body) {
   return saveAppSettings(settings);
 }
 
-// Load deck (cards + state), reconciling like the firmware's loadDeck():
-// records exist for every card, batch restored/filtered, current card selected.
+// Load deck (cards + state), reconciling like the firmware's loadDeck() via the
+// shared engine routine (same code path the offline browser client uses). The
+// configured batch size flows through so a resized batch re-derives on open.
 function openDeck(deck) {
-  const parsed = engine.parseDeckFiles(readDeckFileContents(deck));
-  const cards = parsed.cards;
   const settings = loadAppSettings();
-  let state = loadState(deck);
-  const hadState = !!state;
-  if (!state) state = engine.newDeckState();
-
-  const before = JSON.stringify({
-    r: state.records.length,
-    b: state.batch,
-    o: state.nextBatchStartOffset,
-    c: state.currentKey,
-  });
-  for (const card of cards) engine.findOrCreateRecord(state, card.key);
-  if (cards.length > 0) {
-    engine.restoreOrCreateBatch(state, cards, settings.batchSize);
-    const validCurrent = state.currentKey != null && cards.some((c) => c.key === state.currentKey);
-    const inBatchUnprocessed =
-      validCurrent && state.batch.some((b) => b.key === state.currentKey && b.processed === 0);
-    if (!inBatchUnprocessed) engine.selectNextCard(state, cards, true, settings.batchSize);
-  } else {
-    state.batch = [];
-    state.currentKey = null;
-  }
-  const after = JSON.stringify({
-    r: state.records.length,
-    b: state.batch,
-    o: state.nextBatchStartOffset,
-    c: state.currentKey,
-  });
-  if (!hadState || before !== after) saveState(deck, state);
-
-  return { cards, state, statusMessage: parsed.statusMessage, settings };
+  const { cards, state, statusMessage, changed } = engine.loadDeck(
+    readDeckFileContents(deck),
+    loadState(deck),
+    settings.batchSize,
+  );
+  if (changed) saveState(deck, state);
+  return { cards, state, statusMessage, settings };
 }
 
 function deckSummary(deckDef) {
   const { cards, state } = openDeck(deckDef.id);
-  const recByKey = new Map(state.records.map((r) => [r.key, r]));
-  let dueNow = 0;
-  for (const b of state.batch) {
-    if (b.processed) continue;
-    const rec = recByKey.get(b.key);
-    if (!rec || rec.dueStep <= state.reviewStep) dueNow++;
-  }
   const meta = loadMeta(deckDef.id);
   return {
     deck: deckDef.id,
@@ -230,7 +202,7 @@ function deckSummary(deckDef) {
     memorized: engine.countMemorized(state, cards),
     streakDays: state.streakDays,
     reviewStep: state.reviewStep,
-    dueNow,
+    dueNow: engine.countDue(state),
     files: listDeckFiles(deckDef.id).length,
     lastDeviceSyncAt: meta.lastDeviceSyncAt || null,
   };
@@ -239,39 +211,6 @@ function deckSummary(deckDef) {
 function deckView(deckId) {
   const deckDef = DECKS.find((d) => d.id === deckId);
   const { cards, state, statusMessage, settings } = openDeck(deckId);
-  const recByKey = new Map(state.records.map((r) => [r.key, r]));
-
-  let current = null;
-  if (state.currentKey != null) {
-    const card = cards.find((c) => c.key === state.currentKey);
-    if (card) {
-      const rec = recByKey.get(card.key) || engine.newProgressRecord(card.key);
-      const batchPos = state.batch.findIndex((b) => b.key === card.key);
-      current = {
-        key: card.key,
-        prompt: card.prompt,
-        answer: card.answer,
-        memoryLine: engine.memorizationInfo(rec),
-        batchPosition: batchPos >= 0 ? batchPos + 1 : 0,
-        progress: {
-          phase: rec.phase,
-          learningStep: rec.learningStep,
-          interval: rec.interval,
-          easeX100: rec.easeX100,
-          reviewCount: rec.reviewCount,
-          dueStep: rec.dueStep,
-        },
-      };
-    }
-  }
-
-  let dueNow = 0;
-  for (const b of state.batch) {
-    if (b.processed) continue;
-    const rec = recByKey.get(b.key);
-    if (!rec || rec.dueStep <= state.reviewStep) dueNow++;
-  }
-
   const meta = loadMeta(deckId);
   return {
     deck: deckId,
@@ -280,11 +219,11 @@ function deckView(deckId) {
     memorized: engine.countMemorized(state, cards),
     streakDays: state.streakDays,
     reviewStep: state.reviewStep,
-    batchSize: state.batch.length,
+    batchSize: state.batch.length, // actual live batch length (may be < configured for small decks)
     configuredBatchSize: settings.batchSize,
     batchProcessed: state.batch.filter((b) => b.processed).length,
-    dueNow,
-    current,
+    dueNow: engine.countDue(state),
+    current: engine.projectCurrent(cards, state),
     statusMessage,
     lastDeviceSyncAt: meta.lastDeviceSyncAt || null,
   };
@@ -342,14 +281,28 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
+// Shell assets are revalidatable (not no-store) so the browser HTTP cache and the
+// service worker can hold them for offline use; the SW handles update freshness.
+function serveFileAt(res, file) {
+  const ext = path.extname(file).toLowerCase();
+  send(res, 200, fs.readFileSync(file), {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Cache-Control': 'no-cache',
+  });
+}
+
 function serveStatic(res, urlPath) {
+  // engine.js lives at the project root (shared by server, tests, and the browser
+  // PWA) — serve it here so the offline client can <script src="/engine.js"> the
+  // exact same source the server runs.
+  if (urlPath === '/engine.js') return serveFileAt(res, path.join(__dirname, 'engine.js'));
+
   let rel = urlPath === '/' ? '/index.html' : urlPath;
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     return send(res, 404, 'Not found');
   }
-  const ext = path.extname(file).toLowerCase();
-  send(res, 200, fs.readFileSync(file), { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+  serveFileAt(res, file);
 }
 
 const RATINGS = { hard: engine.RATING.HARD, good: engine.RATING.GOOD, easy: engine.RATING.EASY };
@@ -388,21 +341,19 @@ async function handleApi(req, res, url) {
 
   if (!authorized(req, url)) return send(res, 401, { error: 'unauthorized' });
 
-  // GET/POST /api/settings
+  // GET/POST /api/settings — global app settings (batch size). GET returns the
+  // value plus its allowed range; POST clamps, persists, and re-reconciles every
+  // deck's batch to the new size so it takes effect immediately.
   if (parts.length === 2 && parts[1] === 'settings') {
     if (req.method === 'GET') return send(res, 200, publicAppSettings());
     if (req.method === 'POST') {
       try {
         const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
-        const settings = applyAppSettingsUpdate(body);
-        for (const d of DECKS) openDeck(d.id);
-        return send(res, 200, {
-          batchSize: settings.batchSize,
-          minBatchSize: engine.MIN_BATCH_SIZE,
-          maxBatchSize: engine.BATCH_SIZE,
-        });
+        applyAppSettingsUpdate(body);
+        for (const d of DECKS) openDeck(d.id); // resize live batches on disk right away
+        return send(res, 200, publicAppSettings());
       } catch (err) {
-        return send(res, 400, { error: String(err.message || err) });
+        return send(res, 400, { error: String((err && err.message) || err) });
       }
     }
   }

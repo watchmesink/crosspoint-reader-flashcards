@@ -40,7 +40,7 @@ A zero-dependency Node.js server + mobile-first, **offline-first** PWA that mirr
 
 ### 🤖 Agent skill — [`skill/crosspoint-quizlet-sync/`](./skill/crosspoint-quizlet-sync)
 
-A skill for coding agents (Claude Code / Codex style) that turns vocabulary pasted into chat into dated Quizlet-style deck files, routes each card to the right deck by language detection (optionally auto-translating single terms), uploads to both the device and the web app, and triggers a sync. Includes an optional Telegram bot for collecting words on the go.
+A skill for coding agents (Claude Code / Codex style) that turns vocabulary pasted into chat into dated Quizlet-style deck files, routes each card to the right deck by language detection (optionally auto-translating single terms), uploads to both the device and the web app, and triggers a sync. Includes an optional Telegram bot for collecting words on the go, and a **Kindle Vocabulary Builder importer** (`scripts/kindle_vocab_sync.py`) that pulls the words you look up while reading on a Kindle (its `vocab.db`) into your decks — incrementally, routed by language, translated, and uploaded on the same pipeline. Plug in the Kindle and run it (or use the optional on-mount launchd agent).
 
 ### 🛠 Versioned builds
 

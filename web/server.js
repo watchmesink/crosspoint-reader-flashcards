@@ -7,6 +7,8 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const https = require('node:https');
+const { execFile } = require('node:child_process');
 
 const engine = require('./engine');
 
@@ -16,6 +18,21 @@ const APP_SETTINGS_FILE = path.join(DATA_DIR, 'settings.json'); // global app se
 const API_TOKEN = process.env.API_TOKEN || '';
 const PIN = process.env.PIN || ''; // optional short unlock code for the browser UI
 const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// Kindle Vocabulary Builder ingestion: a jailbroken Kindle uploads its raw
+// vocab.db here over WiFi; we parse WORDS with the sqlite3 CLI, translate new
+// terms, and append them to the matching deck.
+const KINDLE_DIR = path.join(DATA_DIR, 'kindle');
+const KINDLE_DB = path.join(KINDLE_DIR, 'vocab.db');
+const KINDLE_STATE_FILE = path.join(KINDLE_DIR, 'state.json');
+const KINDLE_MAX_PER_RUN = Number(process.env.KINDLE_MAX_PER_RUN || 150); // cap translations per upload
+const KINDLE_WORD_FIELD = process.env.KINDLE_WORD_FIELD === 'word' ? 'word' : 'stem';
+// Kindle language (first subtag) -> { deck, source lang, translation target }.
+const KINDLE_LANG = {
+  de: { deck: 'german', source: 'de', target: 'en' },
+  uk: { deck: 'ukrainian', source: 'uk', target: 'en' },
+  en: { deck: 'english', source: 'en', target: 'de' },
+};
 
 // PIN brute-force lockout: 5 wrong attempts per IP -> 15 min lock.
 const pinAttempts = new Map(); // ip -> {fails, lockUntil}
@@ -229,6 +246,159 @@ function deckView(deckId) {
   };
 }
 
+// ---- Kindle Vocabulary Builder ingestion ----
+// Flow: Kindle uploads vocab.db -> read new WORDS via sqlite3 -> translate ->
+// append to decks/<deck>/files/kindle-YYYY-MM-DD.txt (then the normal deck
+// pipeline + device sync take over). Incremental via KINDLE_STATE_FILE.
+
+function loadKindleState() {
+  try {
+    return JSON.parse(fs.readFileSync(KINDLE_STATE_FILE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveKindleState(state) {
+  fs.mkdirSync(KINDLE_DIR, { recursive: true });
+  atomicWrite(KINDLE_STATE_FILE, JSON.stringify(state, null, 1));
+}
+
+// Read WORDS newer than sinceTs from the uploaded vocab.db via the sqlite3 CLI
+// (read-only, JSON output). Returns [] if the table/db is empty.
+function sqliteReadWords(dbPath, sinceTs) {
+  return new Promise((resolve, reject) => {
+    const sql =
+      'SELECT COALESCE(stem, word) AS stem, word AS word, lang AS lang, ' +
+      'COALESCE(category, 0) AS category, COALESCE(timestamp, 0) AS timestamp ' +
+      `FROM WORDS WHERE COALESCE(timestamp, 0) > ${Number(sinceTs) || 0} ORDER BY timestamp ASC`;
+    execFile('sqlite3', ['-readonly', '-json', dbPath, sql], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
+      if (err) return reject(new Error(`sqlite3 read failed: ${err.message}`));
+      const text = String(stdout || '').trim();
+      if (!text) return resolve([]);
+      try {
+        resolve(JSON.parse(text));
+      } catch (e) {
+        reject(new Error(`sqlite3 JSON parse failed: ${e.message}`));
+      }
+    });
+  });
+}
+
+function decodeEntities(s) {
+  return String(s)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+// Free MyMemory translation (same service the quizlet-sync skill uses). No key.
+function translateMyMemory(term, source, target, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(term)}&langpair=${source}|${target}`;
+    const req = https.get(url, { headers: { 'User-Agent': 'crosspoint-kindle-sync/1.0' } }, (resp) => {
+      let data = '';
+      resp.on('data', (c) => (data += c));
+      resp.on('end', () => {
+        try {
+          const t = decodeEntities(((JSON.parse(data).responseData || {}).translatedText || '')).trim();
+          if (t) resolve(t);
+          else reject(new Error('empty translation'));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('translation timeout')));
+  });
+}
+
+// Parse the uploaded vocab.db, translate new terms, and append them to today's
+// per-deck kindle file. Idempotent: terms already present in a deck are skipped
+// (so re-uploads don't duplicate or re-translate), and the timestamp watermark
+// never advances past a word that failed to translate (retried next upload).
+async function ingestKindleDb() {
+  if (!fs.existsSync(KINDLE_DB)) return { ok: false, error: 'no uploaded vocab.db' };
+  const state = loadKindleState();
+  const sinceTs = Number(state.lastTs || 0);
+  const rows = await sqliteReadWords(KINDLE_DB, sinceTs);
+
+  const date = new Date().toISOString().slice(0, 10);
+  const summary = { ok: true, added: {}, translated: 0, translationErrors: 0, skippedLang: {}, skippedExisting: 0 };
+
+  // Existing prompts per deck (lowercased), to skip words already in a deck.
+  const existingPrompts = {};
+  for (const d of DECKS) {
+    const parsed = engine.parseDeckFiles(readDeckFileContents(d.id));
+    existingPrompts[d.id] = new Set(parsed.cards.map((c) => c.prompt.toLowerCase()));
+  }
+
+  const pending = {}; // deck -> ["term\ttranslation", ...]
+  let processed = 0;
+  let maxTs = sinceTs;
+  let failedMinTs = Infinity;
+
+  for (const row of rows) {
+    if (processed >= KINDLE_MAX_PER_RUN) break; // the rest arrive on the next upload
+    const ts = Number(row.timestamp || 0);
+    const lang = String(row.lang || '').trim().toLowerCase().split('-')[0];
+    const term = String((KINDLE_WORD_FIELD === 'word' ? row.word : row.stem) || row.word || '').trim();
+    const route = KINDLE_LANG[lang];
+
+    if (!term) { maxTs = Math.max(maxTs, ts); continue; }
+    if (!route) {
+      summary.skippedLang[lang || '?'] = (summary.skippedLang[lang || '?'] || 0) + 1;
+      maxTs = Math.max(maxTs, ts);
+      continue;
+    }
+    if (existingPrompts[route.deck].has(term.toLowerCase())) {
+      summary.skippedExisting++;
+      maxTs = Math.max(maxTs, ts);
+      continue;
+    }
+
+    let translation;
+    try {
+      translation = await translateMyMemory(term, route.source, route.target);
+      summary.translated++;
+    } catch {
+      summary.translationErrors++;
+      failedMinTs = Math.min(failedMinTs, ts); // don't advance past an untranslated word
+      continue;
+    }
+    (pending[route.deck] = pending[route.deck] || []).push(`${term}\t${translation}`);
+    existingPrompts[route.deck].add(term.toLowerCase());
+    summary.added[route.deck] = (summary.added[route.deck] || 0) + 1;
+    processed++;
+    maxTs = Math.max(maxTs, ts);
+  }
+
+  // Append the new pairs to today's kindle file per deck, then reconcile.
+  for (const [deck, lines] of Object.entries(pending)) {
+    if (!lines.length) continue;
+    const name = `kindle-${date}.txt`;
+    const file = path.join(filesDir(deck), name);
+    let existing = '';
+    if (fs.existsSync(file)) {
+      existing = fs.readFileSync(file, 'utf8');
+      if (existing && !existing.endsWith('\n')) existing += '\n';
+    }
+    atomicWrite(file, existing + lines.join('\n') + '\n');
+    clearTombstone(deck, name);
+    openDeck(deck); // reconcile records/batch with the new cards
+  }
+
+  const newLastTs = failedMinTs === Infinity ? maxTs : Math.min(maxTs, failedMinTs - 1);
+  summary.processedTs = newLastTs;
+  saveKindleState({ ...state, lastTs: newLastTs, lastRun: new Date().toISOString() });
+  return summary;
+}
+
 // ---- HTTP plumbing ----
 
 function send(res, status, body, headers = {}) {
@@ -356,6 +526,38 @@ async function handleApi(req, res, url) {
         return send(res, 400, { error: String((err && err.message) || err) });
       }
     }
+  }
+
+  // POST/PUT /api/kindle/vocab — a (jailbroken) Kindle uploads its raw vocab.db
+  // (request body = the SQLite file). We store it, then ingest new words into
+  // the decks. Default is fire-and-forget (fast response for the device); add
+  // ?wait=1 to block and return the ingest summary (used by tests/manual runs).
+  if (parts.length === 3 && parts[1] === 'kindle' && parts[2] === 'vocab' && (req.method === 'POST' || req.method === 'PUT')) {
+    const body = await readBody(req, 64 * 1024 * 1024);
+    if (!body.length) return send(res, 400, { error: 'empty body (expected a vocab.db file)' });
+    if (body.slice(0, 15).toString('latin1') !== 'SQLite format 3') {
+      return send(res, 400, { error: 'body is not a SQLite database' });
+    }
+    fs.mkdirSync(KINDLE_DIR, { recursive: true });
+    atomicWrite(KINDLE_DB, body);
+    if (url.searchParams.get('wait') === '1') {
+      try {
+        const summary = await ingestKindleDb();
+        return send(res, 200, { stored: true, bytes: body.length, ...summary });
+      } catch (err) {
+        return send(res, 500, { stored: true, bytes: body.length, error: String((err && err.message) || err) });
+      }
+    }
+    ingestKindleDb()
+      .then((s) => console.log('[kindle] ingest', JSON.stringify(s)))
+      .catch((e) => console.error('[kindle] ingest error:', (e && e.message) || e));
+    return send(res, 200, { stored: true, bytes: body.length, queued: true });
+  }
+
+  // GET /api/kindle/status — last import watermark (debug/monitoring).
+  if (parts.length === 3 && parts[1] === 'kindle' && parts[2] === 'status' && req.method === 'GET') {
+    const st = loadKindleState();
+    return send(res, 200, { lastTs: st.lastTs || 0, lastRun: st.lastRun || null, hasDb: fs.existsSync(KINDLE_DB) });
   }
 
   // GET /api/decks

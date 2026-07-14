@@ -1,0 +1,5 @@
+# The Node server shells out to the `sqlite3` CLI to read an uploaded Kindle
+# vocab.db (POST /api/kindle/vocab). Nixpacks still auto-detects Node; this only
+# adds the sqlite3 system package to the build image.
+[phases.setup]
+aptPkgs = ["sqlite3"]

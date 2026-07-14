@@ -64,6 +64,13 @@
   }
   header h1 { font-size: 19px; margin: 0; flex: 1; font-weight: 700; letter-spacing: .2px; }
   header .streak { font-size: 14px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  header .status {
+    font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer;
+    border: 1.5px solid var(--line); border-radius: 999px; padding: 5px 10px;
+    color: var(--muted); background: var(--paper);
+  }
+  header .status[data-kind=offline] { color: var(--hard); border-color: var(--hard); }
+  header .status[data-kind=syncing] { color: var(--good); border-color: var(--good); }
   main {
     flex: 1; min-height: 0;
     padding: 4px 16px calc(env(safe-area-inset-bottom) + 12px);
@@ -149,23 +156,25 @@
   .file-name { flex: 1; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .file-size { font-size: 12px; color: var(--muted); }
   .file-del { background: none; border: none; color: var(--hard); font-size: 17px; cursor: pointer; padding: 4px 6px; }
-  textarea, input[type=text], input[type=number] {
+  textarea, input[type=text] {
     width: 100%; background: var(--paper); color: var(--ink);
     border: 1.5px solid var(--line); border-radius: 14px; padding: 12px; font-size: 15px; font-family: inherit;
   }
   textarea { min-height: 110px; resize: vertical; }
-  .setting-group {
-    background: var(--paper); border: 1.5px solid var(--line); border-radius: var(--radius);
-    padding: 16px; display: flex; flex-direction: column; gap: 10px;
-  }
-  .setting-group label { font-size: 14px; color: var(--muted); font-weight: 700; }
-  .setting-inline { display: flex; align-items: center; gap: 10px; }
-  .setting-inline input { flex: 1; min-width: 0; }
-  .setting-range { color: var(--muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
   pre.viewer {
     background: var(--paper); border: 1.5px solid var(--line); border-radius: 14px;
     padding: 14px; font-size: 13px; overflow: auto; white-space: pre-wrap; margin: 0;
   }
+
+  /* settings */
+  .setting-group { background: var(--paper); border: 1.5px solid var(--line); border-radius: var(--radius); padding: 18px; }
+  .setting-label { display: block; font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+  .setting-inline { display: flex; align-items: center; gap: 10px; }
+  .setting-inline input[type=number] {
+    width: 100px; background: var(--paper); color: var(--ink); font-variant-numeric: tabular-nums;
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 17px; font-family: inherit;
+  }
+  .setting-range { font-size: 13px; color: var(--muted); font-weight: 600; }
   .toast {
     position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 84px); transform: translateX(-50%);
     background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px;
@@ -188,6 +197,7 @@
   <button class="back hidden" id="backBtn">&#8249; Back</button>
   <h1 id="title">CrossPoint Cards</h1>
   <span class="streak" id="streak"></span>
+  <span class="status" id="status" title="Tap to sync"></span>
 </header>
 <main id="main"></main>
 <div class="toast" id="toast"></div>
@@ -195,357 +205,11 @@
   <h2>Enter PIN</h2>
   <input type="password" id="tokenInput" placeholder="••••••••" inputmode="numeric" autocomplete="off"
          maxlength="12" style="font-size:26px; letter-spacing:8px; max-width:240px;">
-  <button class="btn" id="tokenSave">Unlock</button>
+  <button class="btn" id="tokenSave">Unlock &amp; sync</button>
+  <button class="btn secondary" id="tokenSkip">Study offline</button>
 </div>
 
-<script>
-'use strict';
-const $ = (id) => document.getElementById(id);
-const FLAGS = { german: '\u{1F1E9}\u{1F1EA}', ukrainian: '\u{1F1FA}\u{1F1E6}', english: '\u{1F1EC}\u{1F1E7}' };
-
-let token = localStorage.getItem('cp_token') || '';
-const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) {
-  token = urlToken;
-  localStorage.setItem('cp_token', token);
-  history.replaceState(null, '', location.pathname + location.hash);
-}
-
-function toast(msg) {
-  const t = $('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove('show'), 2200);
-}
-
-async function api(path, opts = {}) {
-  const headers = { ...(opts.headers || {}) };
-  if (token) headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(path, { ...opts, headers });
-  if (res.status === 401) {
-    $('tokenOverlay').classList.remove('hidden');
-    throw new Error('unauthorized');
-  }
-  if (!res.ok) {
-    let msg = res.statusText;
-    try { msg = (await res.json()).error || msg; } catch {}
-    throw new Error(msg);
-  }
-  const ct = res.headers.get('content-type') || '';
-  return ct.includes('json') ? res.json() : res.text();
-}
-
-async function unlockWithPin() {
-  const pin = $('tokenInput').value.trim();
-  if (!pin) return;
-  try {
-    const res = await fetch('/api/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
-    });
-    if (!res.ok) {
-      $('tokenInput').value = '';
-      toast(res.status === 429 ? 'Too many attempts — try again in 15 min' : 'Wrong PIN');
-      return;
-    }
-    token = (await res.json()).token;
-    localStorage.setItem('cp_token', token);
-    $('tokenOverlay').classList.add('hidden');
-    route();
-  } catch (e) {
-    toast(e.message);
-  }
-}
-$('tokenSave').onclick = unlockWithPin;
-$('tokenInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') unlockWithPin(); });
-
-// ---- routing ----
-window.addEventListener('hashchange', route);
-$('backBtn').onclick = () => history.back();
-
-function nav(hash) { location.hash = hash; }
-
-function setHeader(title, { back = false, streak = '' } = {}) {
-  $('title').textContent = title;
-  $('backBtn').classList.toggle('hidden', !back);
-  $('streak').textContent = streak;
-}
-
-async function route() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  try {
-    if (parts.length === 0) return await showDeckList();
-    if (parts[0] === 'settings') return await showSettings();
-    if (parts[0] === 'deck' && parts.length === 2) return await showDeckHome(parts[1]);
-    if (parts[0] === 'deck' && parts[2] === 'study') return await showStudy(parts[1]);
-    if (parts[0] === 'deck' && parts[2] === 'files') return await showFiles(parts[1]);
-    nav('');
-  } catch (e) {
-    if (e.message !== 'unauthorized') toast(e.message);
-  }
-}
-
-function timeAgo(iso) {
-  if (!iso) return 'never';
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 90) return 'just now';
-  if (s < 3600) return Math.round(s / 60) + ' min ago';
-  if (s < 86400 * 2) return Math.round(s / 3600) + ' h ago';
-  return Math.round(s / 86400) + ' days ago';
-}
-
-// ---- screens ----
-
-async function showDeckList() {
-  setHeader('CrossPoint Cards');
-  const decks = await api('/api/decks');
-  const main = $('main');
-  main.classList.remove('no-scroll');
-  main.innerHTML = '';
-  const maxStreak = Math.max(...decks.map((d) => d.streakDays), 0);
-  $('streak').textContent = maxStreak > 0 ? '\u{1F525} ' + maxStreak : '';
-  for (const d of decks) {
-    const el = document.createElement('div');
-    el.className = 'deck-card';
-    el.innerHTML = `
-      <div class="deck-flag">${FLAGS[d.deck] || '\u{1F0CF}'}</div>
-      <div class="deck-info">
-        <div class="deck-name">${d.label}</div>
-        <div class="deck-meta">${d.memorized}/${d.total} memorized · ${d.files} files · sync ${timeAgo(d.lastDeviceSyncAt)}</div>
-      </div>
-      ${d.dueNow > 0 ? `<div class="deck-due">${d.dueNow} due</div>` : ''}`;
-    el.onclick = () => nav('/deck/' + d.deck);
-    main.appendChild(el);
-  }
-
-  const settings = document.createElement('button');
-  settings.className = 'btn secondary';
-  settings.textContent = 'Settings';
-  settings.onclick = () => nav('/settings');
-  main.appendChild(settings);
-}
-
-async function showSettings() {
-  const settings = await api('/api/settings');
-  setHeader('Settings', { back: true });
-  const main = $('main');
-  main.classList.remove('no-scroll');
-  main.innerHTML = `
-    <div class="setting-group">
-      <label for="batchSizeInput">Cards per batch</label>
-      <div class="setting-inline">
-        <input type="number" id="batchSizeInput" min="${settings.minBatchSize}" max="${settings.maxBatchSize}"
-               step="1" inputmode="numeric" value="${settings.batchSize}">
-        <span class="setting-range">${settings.minBatchSize}-${settings.maxBatchSize}</span>
-      </div>
-    </div>
-    <button class="btn primary" id="settingsSave" type="button">Save Settings</button>`;
-
-  $('settingsSave').onclick = async () => {
-    const btn = $('settingsSave');
-    btn.disabled = true;
-    try {
-      const result = await api('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batchSize: Number($('batchSizeInput').value) }),
-      });
-      $('batchSizeInput').value = result.batchSize;
-      toast('Settings saved');
-    } catch (e) {
-      toast(e.message);
-    } finally {
-      btn.disabled = false;
-    }
-  };
-}
-
-async function showDeckHome(deck) {
-  const v = await api('/api/decks/' + deck);
-  setHeader(`${FLAGS[deck] || ''} ${v.label}`, { back: true, streak: v.streakDays ? '\u{1F525} ' + v.streakDays : '' });
-  const main = $('main');
-  main.classList.remove('no-scroll');
-  main.innerHTML = '';
-
-  const stats = document.createElement('div');
-  stats.className = 'stat-block';
-  stats.innerHTML = `
-    <div class="stat-row"><span>Memorized cards</span><b>${v.memorized} / ${v.total}</b></div>
-    <div class="stat-row"><span>Streak</span><b>${v.streakDays} day${v.streakDays === 1 ? '' : 's'}</b></div>
-    <div class="stat-row"><span>Current batch</span><b>${v.batchProcessed} / ${v.batchSize} done</b></div>
-    <div class="stat-row"><span>Total reviews</span><b>${v.reviewStep}</b></div>
-    <div class="stat-row"><span>Device sync</span><b>${timeAgo(v.lastDeviceSyncAt)}</b></div>`;
-  main.appendChild(stats);
-
-  if (v.total === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'sub';
-    empty.textContent = 'No flashcards yet. Upload .txt files (term\\ttranslation per line).';
-    main.appendChild(empty);
-  } else {
-    const learn = document.createElement('button');
-    learn.className = 'btn primary';
-    learn.textContent = 'Learn';
-    learn.onclick = () => nav('/deck/' + deck + '/study');
-    main.appendChild(learn);
-  }
-
-  const files = document.createElement('button');
-  files.className = 'btn secondary';
-  files.textContent = 'Files (' + (v.total === 0 ? 'upload' : 'manage') + ')';
-  files.onclick = () => nav('/deck/' + deck + '/files');
-  main.appendChild(files);
-
-  const status = document.createElement('p');
-  status.className = 'sub';
-  status.textContent = v.statusMessage || '';
-  main.appendChild(status);
-}
-
-async function showStudy(deck) {
-  let v = await api('/api/decks/' + deck);
-  if (!v.current) { nav('/deck/' + deck); return; }
-  setHeader(`${FLAGS[deck] || ''} ${v.label}`, { back: true });
-
-  const main = $('main');
-  main.classList.add('no-scroll');
-  main.innerHTML = `
-    <div class="study-top">
-      <div class="counter" id="counter"></div>
-      <div class="memory" id="memoryLine"></div>
-    </div>
-    <div class="card-wrap">
-      <div class="card" id="card">
-        <div class="face prompt">
-          <div class="side-label">Prompt</div>
-          <div class="word" id="promptText"></div>
-          <div class="hint">tap to flip</div>
-        </div>
-        <div class="face answer">
-          <div class="side-label">Translation</div>
-          <div class="word" id="answerText"></div>
-          <div class="hint">tap to flip back</div>
-        </div>
-      </div>
-    </div>
-    <div class="rate-row">
-      <button class="btn hard" id="rateHard">Hard</button>
-      <button class="btn good" id="rateGood">Good</button>
-      <button class="btn easy" id="rateEasy">Easy</button>
-    </div>`;
-
-  const card = $('card');
-  card.onclick = () => card.classList.toggle('flipped');
-
-  function fitWord(el, text) {
-    el.textContent = text;
-    const len = text.length;
-    el.style.fontSize = len > 120 ? '20px' : len > 60 ? '24px' : len > 30 ? '30px' : '38px';
-  }
-
-  function renderCurrent() {
-    const c = v.current;
-    $('counter').textContent = `Card ${c.batchPosition}/${v.batchSize || 1} · batch ${v.batchProcessed}/${v.batchSize} done`;
-    $('memoryLine').textContent = c.memoryLine;
-    card.classList.remove('flipped');
-    fitWord($('promptText'), c.prompt);
-    fitWord($('answerText'), c.answer);
-  }
-
-  async function rate(rating) {
-    for (const id of ['rateHard', 'rateGood', 'rateEasy']) $(id).disabled = true;
-    try {
-      v = await api('/api/decks/' + deck + '/rate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: v.current.key, rating }),
-      });
-      $('streak').textContent = v.streakDays ? '\u{1F525} ' + v.streakDays : '';
-      if (!v.current) { nav('/deck/' + deck); return; }
-      renderCurrent();
-    } catch (e) {
-      toast(e.message);
-    } finally {
-      for (const id of ['rateHard', 'rateGood', 'rateEasy']) $(id).disabled = false;
-    }
-  }
-
-  $('rateHard').onclick = () => rate('hard');
-  $('rateGood').onclick = () => rate('good');
-  $('rateEasy').onclick = () => rate('easy');
-  renderCurrent();
-}
-
-async function showFiles(deck) {
-  setHeader('Files', { back: true });
-  const files = await api('/api/decks/' + deck + '/files');
-  const main = $('main');
-  main.classList.remove('no-scroll');
-  main.innerHTML = '';
-
-  const upload = document.createElement('div');
-  upload.innerHTML = `
-    <input type="file" id="filePick" accept=".txt" multiple class="hidden">
-    <button class="btn secondary" id="uploadBtn">Upload .txt files</button>
-    <p class="sub" style="margin:14px 0 6px">or paste cards (term<b>&#8677;TAB</b>translation per line)</p>
-    <textarea id="pasteArea" placeholder="der Hund&#9;the dog&#10;die Katze&#9;the cat"></textarea>
-    <div style="height:8px"></div>
-    <button class="btn" id="pasteSave">Save pasted cards</button>`;
-  main.appendChild(upload);
-
-  const list = document.createElement('div');
-  list.style.display = 'flex';
-  list.style.flexDirection = 'column';
-  list.style.gap = '8px';
-  main.appendChild(list);
-
-  for (const f of files) {
-    const row = document.createElement('div');
-    row.className = 'file-row';
-    row.innerHTML = `
-      <span class="file-name">${f.name}</span>
-      <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
-      <button class="file-del">&#10005;</button>`;
-    row.querySelector('.file-name').onclick = async () => {
-      const content = await api('/api/decks/' + deck + '/files/' + encodeURIComponent(f.name));
-      let viewer = row.nextElementSibling;
-      if (viewer && viewer.classList.contains('viewer')) { viewer.remove(); return; }
-      viewer = document.createElement('pre');
-      viewer.className = 'viewer';
-      viewer.textContent = content;
-      row.after(viewer);
-    };
-    row.querySelector('.file-del').onclick = async () => {
-      if (!confirm('Delete ' + f.name + '? It will also be removed from the device on next sync.')) return;
-      await api('/api/decks/' + deck + '/files/' + encodeURIComponent(f.name), { method: 'DELETE' });
-      toast('Deleted ' + f.name);
-      showFiles(deck);
-    };
-    list.appendChild(row);
-  }
-
-  $('uploadBtn').onclick = () => $('filePick').click();
-  $('filePick').onchange = async (e) => {
-    for (const file of e.target.files) {
-      const content = await file.text();
-      await api('/api/decks/' + deck + '/files/' + encodeURIComponent(file.name), { method: 'PUT', body: content });
-    }
-    toast('Uploaded ' + e.target.files.length + ' file(s)');
-    showFiles(deck);
-  };
-  $('pasteSave').onclick = async () => {
-    const text = $('pasteArea').value.trim();
-    if (!text) return;
-    const name = 'web-' + new Date().toISOString().slice(0, 10) + '-' + Date.now().toString(36).slice(-4) + '.txt';
-    await api('/api/decks/' + deck + '/files/' + encodeURIComponent(name), { method: 'PUT', body: text + '\n' });
-    toast('Saved ' + name);
-    showFiles(deck);
-  };
-}
-
-route();
-</script>
+<script src="/engine.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

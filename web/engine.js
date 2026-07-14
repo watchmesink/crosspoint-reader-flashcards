@@ -6,7 +6,7 @@
 
 const PROGRESS_VERSION = 6;
 const MAX_FLASHCARDS_TOTAL = 900;
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 20; // default study batch AND hard ceiling (device bin stores batch length in one byte, capped at 20)
 const MIN_BATCH_SIZE = 1;
 const LEARNING_STEPS = [1, 8, 48];
 const MATURE_INTERVAL = 21;
@@ -20,19 +20,82 @@ const RATING = { HARD: 0, GOOD: 1, EASY: 2 };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
+// Configurable study batch size, clamped to [MIN_BATCH_SIZE, BATCH_SIZE]. Non-finite
+// input (undefined/NaN) falls back to the BATCH_SIZE default. BATCH_SIZE stays the
+// ceiling so a serialized batch always fits the device bin's one-byte, <=20 batch field.
 function normalizeBatchSize(value) {
   const n = Math.trunc(Number(value));
   if (!Number.isFinite(n)) return BATCH_SIZE;
   return clamp(n, MIN_BATCH_SIZE, BATCH_SIZE);
 }
 
+// ---- Byte buffer abstraction ----------------------------------------------
+// The engine runs in two places: Node (server + tests) and the browser (offline
+// PWA). Node has Buffer; the browser does not. PortableBuffer is a Uint8Array
+// subclass implementing exactly the Buffer API the codec uses, so the SAME
+// engine source produces byte-identical bins in both. _Buffer is the real Buffer
+// in Node and PortableBuffer in the browser. A Node test round-trips through
+// PortableBuffer to lock the parity (firmware bin must stay byte-exact).
+const PortableBuffer = (() => {
+  const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+  class PortableBuffer extends Uint8Array {
+    static alloc(n) { return new PortableBuffer(n); }
+    static from(data, encoding) {
+      if (typeof data === 'string') {
+        if (encoding === 'base64') {
+          const bin = atob(data);
+          const b = new PortableBuffer(bin.length);
+          for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+          return b;
+        }
+        const u = encoder.encode(data); // utf8
+        const b = new PortableBuffer(u.length);
+        b.set(u);
+        return b;
+      }
+      const b = new PortableBuffer(data.length);
+      b.set(data);
+      return b;
+    }
+    _view() {
+      return this.__dv || (this.__dv = new DataView(this.buffer, this.byteOffset, this.byteLength));
+    }
+    readUInt8(o) { return this._view().getUint8(o); }
+    readUInt16LE(o) { return this._view().getUint16(o, true); }
+    readUInt32LE(o) { return this._view().getUint32(o, true); }
+    readInt32LE(o) { return this._view().getInt32(o, true); }
+    writeUInt8(v, o) { this._view().setUint8(o, v & 0xff); }
+    writeUInt16LE(v, o) { this._view().setUint16(o, v & 0xffff, true); }
+    writeUInt32LE(v, o) { this._view().setUint32(o, v >>> 0, true); }
+    writeInt32LE(v, o) { this._view().setInt32(o, v | 0, true); }
+    equals(other) {
+      if (this.length !== other.length) return false;
+      for (let i = 0; i < this.length; i++) if (this[i] !== other[i]) return false;
+      return true;
+    }
+    toString(encoding) {
+      if (encoding === 'base64') {
+        let s = '';
+        for (let i = 0; i < this.length; i++) s += String.fromCharCode(this[i]);
+        return btoa(s);
+      }
+      return Uint8Array.prototype.toString.call(this);
+    }
+  }
+  return PortableBuffer;
+})();
+
+const _Buffer = typeof Buffer !== 'undefined' ? Buffer : PortableBuffer;
+const toBase64 = (buf) => buf.toString('base64');
+const fromBase64 = (str) => _Buffer.from(str, 'base64');
+
 // FNV-1a over UTF-8 bytes of prompt + '\t' + answer, uint32 wrap-around.
 function hashCard(prompt, answer) {
   let h = 2166136261 >>> 0;
   const mix = (b) => { h = Math.imul(h ^ b, 16777619) >>> 0; };
-  for (const b of Buffer.from(prompt, 'utf8')) mix(b);
+  for (const b of _Buffer.from(prompt, 'utf8')) mix(b);
   mix(9); // '\t'
-  for (const b of Buffer.from(answer, 'utf8')) mix(b);
+  for (const b of _Buffer.from(answer, 'utf8')) mix(b);
   return h >>> 0;
 }
 
@@ -208,7 +271,7 @@ function serializeProgressBin(state) {
   const recordBytes = 23;
   const batch = state.batch.slice(0, BATCH_SIZE);
   const size = 1 + 4 + 2 + 2 + state.records.length * recordBytes + 1 + batch.length * 5 + 1 + 2 + 4;
-  const buf = Buffer.alloc(size);
+  const buf = _Buffer.alloc(size);
   let off = 0;
   const u8 = (v) => { buf.writeUInt8(v & 0xff, off); off += 1; };
   const u16 = (v) => { buf.writeUInt16LE(v & 0xffff, off); off += 2; };
@@ -437,8 +500,8 @@ function selectNextCard(state, cards, includeFutureCards, requestedBatchSize = B
 function rateCard(state, cards, key, rating, nowMs = Date.now(), requestedBatchSize = BATCH_SIZE) {
   const card = cards.find((c) => c.key === key);
   if (!card) return false;
-  const batchSize = normalizeBatchSize(requestedBatchSize);
 
+  const batchSize = normalizeBatchSize(requestedBatchSize);
   const rec = findOrCreateRecord(state, key);
   state.reviewStep = (state.reviewStep + 1) >>> 0;
   if (rec.reviewCount < 65535) rec.reviewCount++;
@@ -488,6 +551,75 @@ function memorizationInfo(rec) {
   return `Memory: ${stateLabel} | EF ${whole}.${frac} | Ivl ${rec.interval}`;
 }
 
+// ---- Shared deck loading / view projection --------------------------------
+// Pure (no I/O) so the server (over the filesystem) and the offline browser
+// client (over IndexedDB) reconcile decks identically. Mirrors the server's
+// openDeck()/deckView() reconcile exactly.
+
+// Given parsed deck files [{name, content}] and an optional prior state, ensure a
+// record per card, restore/rebuild the batch, and select the current card —
+// returning {cards, state, statusMessage, changed}. `changed` flags whether the
+// reconcile mutated the persisted shape (so the caller can avoid a needless save).
+function loadDeck(fileContents, prevState, requestedBatchSize = BATCH_SIZE) {
+  const parsed = parseDeckFiles(fileContents);
+  const cards = parsed.cards;
+  const batchSize = normalizeBatchSize(requestedBatchSize);
+  const hadState = !!prevState;
+  const state = prevState || newDeckState();
+
+  const shape = (s) => JSON.stringify({ r: s.records.length, b: s.batch, o: s.nextBatchStartOffset, c: s.currentKey });
+  const before = shape(state);
+  for (const card of cards) findOrCreateRecord(state, card.key);
+  if (cards.length > 0) {
+    restoreOrCreateBatch(state, cards, batchSize);
+    const validCurrent = state.currentKey != null && cards.some((c) => c.key === state.currentKey);
+    const inBatchUnprocessed =
+      validCurrent && state.batch.some((b) => b.key === state.currentKey && b.processed === 0);
+    if (!inBatchUnprocessed) selectNextCard(state, cards, true, batchSize);
+  } else {
+    state.batch = [];
+    state.currentKey = null;
+  }
+  const changed = !hadState || before !== shape(state);
+  return { cards, state, statusMessage: parsed.statusMessage, changed };
+}
+
+// The current card projected for the study UI (mirrors deckView().current).
+function projectCurrent(cards, state) {
+  if (state.currentKey == null) return null;
+  const card = cards.find((c) => c.key === state.currentKey);
+  if (!card) return null;
+  const rec = state.records.find((r) => r.key === card.key) || newProgressRecord(card.key);
+  const batchPos = state.batch.findIndex((b) => b.key === card.key);
+  return {
+    key: card.key,
+    prompt: card.prompt,
+    answer: card.answer,
+    memoryLine: memorizationInfo(rec),
+    batchPosition: batchPos >= 0 ? batchPos + 1 : 0,
+    progress: {
+      phase: rec.phase,
+      learningStep: rec.learningStep,
+      interval: rec.interval,
+      easeX100: rec.easeX100,
+      reviewCount: rec.reviewCount,
+      dueStep: rec.dueStep,
+    },
+  };
+}
+
+// Count unprocessed batch cards whose due step has arrived (mirrors deckView dueNow).
+function countDue(state) {
+  const recByKey = new Map(state.records.map((r) => [r.key, r]));
+  let dueNow = 0;
+  for (const b of state.batch) {
+    if (b.processed) continue;
+    const rec = recByKey.get(b.key);
+    if (!rec || rec.dueStep <= state.reviewStep) dueNow++;
+  }
+  return dueNow;
+}
+
 // ---- Two-way merge for device sync ----
 // The side with the larger reviewStep is "primary" (more recent activity); per-card
 // records pick the more-reviewed side. Idempotent: merge(a, a) === a.
@@ -528,17 +660,20 @@ function pickRecord(a, b) {
   return a;
 }
 
-module.exports = {
+const api = {
   PROGRESS_VERSION,
   MAX_FLASHCARDS_TOTAL,
   BATCH_SIZE,
   MIN_BATCH_SIZE,
+  normalizeBatchSize,
   LEARNING_STEPS,
   MATURE_INTERVAL,
   PHASE,
   RATING,
+  PortableBuffer,
+  toBase64,
+  fromBase64,
   hashCard,
-  normalizeBatchSize,
   asciiTrim,
   naturalCompare,
   parseDeckFiles,
@@ -557,8 +692,19 @@ module.exports = {
   findNextCardIndex,
   selectNextCard,
   rateCard,
+  loadDeck,
+  projectCurrent,
+  countDue,
   isCardMemorized,
   countMemorized,
   memorizationInfo,
   mergeDeckStates,
 };
+
+// Dual export: CommonJS for the Node server/tests, a global for the browser PWA
+// (loaded via <script src="/engine.js">), so both run this exact source.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = api;
+} else {
+  (typeof globalThis !== 'undefined' ? globalThis : self).CPEngine = api;
+}

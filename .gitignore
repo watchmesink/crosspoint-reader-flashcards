@@ -10,3 +10,4 @@ build
 /compile_commands.json
 /.cache
 .gleb_version_counter
+skill/crosspoint-quizlet-sync/kindle-device/vocab_sync.conf

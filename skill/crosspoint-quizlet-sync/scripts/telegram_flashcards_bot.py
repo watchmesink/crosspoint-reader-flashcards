@@ -494,7 +494,7 @@ def main() -> int:
     parser.add_argument("--token", default=os.environ.get("TELEGRAM_BOT_TOKEN"), help="Telegram bot token.")
     parser.add_argument(
         "--state-dir",
-        default=os.environ.get("FLASHCARDS_BOT_STATE_DIR", "/data/state"),
+        default=os.path.expanduser(os.environ.get("FLASHCARDS_BOT_STATE_DIR", "~/.crosspoint_sync/telegram")),
         help="Directory for persistent state.",
     )
     parser.add_argument(

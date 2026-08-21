@@ -23,13 +23,15 @@ TIMEOUT="${HTTP_TIMEOUT:-120}"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null; }
 
 [ -z "$WEB" ] && { log "ERROR: WEB_URL not configured"; exit 1; }
+[ -z "$TOKEN" ] && { log "ERROR: WEB_TOKEN not configured"; exit 1; }
 [ -f "$DB" ] || { log "ERROR: vocab.db not found at $DB"; exit 1; }
 
 URL="$WEB/api/kindle/vocab"
 
 # Prefer curl; fall back to BusyBox wget. Either uploads the raw DB as the body.
 if command -v curl >/dev/null 2>&1; then
-  OUT=$(curl -s -m "$TIMEOUT" -H "Authorization: Bearer $TOKEN" \
+  OUT=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | \
+        curl -fsS -m "$TIMEOUT" --config - \
         --data-binary @"$DB" -X POST "$URL" 2>>"$LOG")
   RC=$?
 elif command -v wget >/dev/null 2>&1; then

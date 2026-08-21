@@ -52,12 +52,13 @@ class SyncSummary:
     translation_errors: int = 0
     ambiguous_lines: int = 0
     unrouted_lines: int = 0
+    article_inserted_count: int = 0
 
 
 DECKS: Dict[str, DeckConfig] = {
     "german": DeckConfig("german", "German", "german", "de", "en"),
     "ukrainian": DeckConfig("ukrainian", "Ukrainian", "ukrainian", "uk", "en"),
-    "english": DeckConfig("english", "English", "english", "en", "de"),
+    "english": DeckConfig("english", "English", "english", "en", "ru"),
 }
 
 GERMAN_WORDS = {
@@ -137,9 +138,58 @@ ENGLISH_SUFFIXES = ("ed", "er", "est", "ing", "less", "ly", "ment", "ness", "shi
 GERMAN_FRAGMENTS = ("sch", "tsch", "ä", "ö", "ü", "ß")
 ENGLISH_FRAGMENTS = ("ough", "tion", "tional", "sh", "th", "wh")
 
+# The input is usually a short vocabulary item, so a missing German article is
+# a common and costly omission. Keep a small reliable lexicon for irregular and
+# frequent nouns, and supplement it with conservative gender suffix rules.
+GERMAN_NOUN_ARTICLES = {
+    "aufwand": "der",
+    "fingerspitzengefühl": "das",
+    "geschick": "das",
+    "genauigkeit": "die",
+    "leidenschaft": "die",
+    "nervenkitzel": "der",
+}
+GERMAN_ARTICLE_PREFIXES = {
+    "der", "die", "das", "den", "dem", "des",
+    "ein", "eine", "einen", "einem", "einer", "eines",
+    "kein", "keine", "keinen", "keinem", "keiner", "keines",
+}
+GERMAN_FEMININE_SUFFIXES = (
+    "keit", "heit", "schaft", "ung", "tion", "ion", "tät", "ik",
+    "ur", "ei", "anz", "enz", "ität",
+)
+GERMAN_NEUTER_SUFFIXES = ("chen", "lein", "ment")
+
+# Fixed expressions need their syntactic case rather than a nominative article.
+GERMAN_ARTICLE_PHRASES = {
+    "aufwand betreiben": "einen Aufwand betreiben",
+}
+
 CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 LATIN_TOKEN_RE = re.compile(r"[A-Za-zÄÖÜäöüß]+")
 DECK_HINT_PREFIX = "[[deck:"
+
+# Non-interactive shells (agent sessions) don't load ~/.zshrc, so env vars may
+# be absent; ~/.crosspoint_sync/config.json is the shell-independent fallback.
+CONFIG_FILE = os.path.expanduser(os.environ.get("CROSSPOINT_CONFIG", "~/.crosspoint_sync/config.json"))
+
+
+def _load_config_file() -> Dict[str, str]:
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v) for k, v in data.items() if isinstance(v, (str, int))}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+_CONFIG = _load_config_file()
+
+
+def _setting(env_key: str, config_key: str, default: str = "") -> str:
+    return os.environ.get(env_key) or _CONFIG.get(config_key, "") or default
 
 
 def _parse_input_line(raw: str) -> Tuple[str, str | None, str | None] | None:
@@ -173,6 +223,50 @@ def _parse_input_line(raw: str) -> Tuple[str, str | None, str | None] | None:
     if not term or not translation:
         return None
     return term, translation, deck_hint
+
+
+def _capitalize_german_noun(word: str) -> str:
+    """Capitalize a noun while preserving the rest of the supplied spelling."""
+    return word[:1].upper() + word[1:] if word else word
+
+
+def _german_article_for_word(word: str) -> str | None:
+    normalized = word.strip().lower()
+    if normalized in GERMAN_NOUN_ARTICLES:
+        return GERMAN_NOUN_ARTICLES[normalized]
+    if normalized.endswith(GERMAN_NEUTER_SUFFIXES):
+        return "das"
+    if normalized.endswith(GERMAN_FEMININE_SUFFIXES):
+        return "die"
+    return None
+
+
+def _normalize_german_term(term: str) -> Tuple[str, bool]:
+    """Add a German article when a bare noun can be identified reliably.
+
+    Short phrases are left unchanged unless they have an explicit phrase rule;
+    grammatical case cannot be inferred safely from an arbitrary phrase.
+    """
+    original = " ".join(term.strip().split())
+    if not original:
+        return original, False
+
+    phrase = GERMAN_ARTICLE_PHRASES.get(original.lower())
+    if phrase:
+        return phrase, phrase != original
+
+    words = original.split(" ")
+    if len(words) != 1:
+        return original, False
+
+    word = words[0]
+    if word.lower() in GERMAN_ARTICLE_PREFIXES:
+        return original, False
+
+    article = _german_article_for_word(word)
+    if not article:
+        return original, False
+    return f"{article} {_capitalize_german_noun(word)}", True
 
 
 def _translate_mymemory(text: str, source_lang: str, target_lang: str, timeout_sec: int) -> str:
@@ -244,6 +338,16 @@ def _http_post_form(url: str, fields: Sequence[Tuple[str, str]], timeout_sec: in
         return exc.code, payload
 
 
+def _device_awake(host: str, timeout_sec: int = 3) -> bool:
+    """Quick probe: the e-reader sleeps aggressively, so don't wait on 20s timeouts."""
+    request = urllib.request.Request(f"{host}/api/status")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            return response.getcode() == 200
+    except Exception:
+        return False
+
+
 def _ensure_remote_path(host: str, remote_path: str, timeout_sec: int) -> None:
     path = remote_path.strip()
     if not path or path == "/":
@@ -303,10 +407,11 @@ def _upload_file(host: str, remote_path: str, local_path: str, timeout_sec: int)
         return response.getcode(), response.read().decode("utf-8", errors="replace")
 
 
-DEFAULT_SYNC_AGENT = os.environ.get(
+REPO_SYNC_AGENT = str(Path(__file__).resolve().parents[3] / "web" / "agent" / "sync_agent.py")
+DEFAULT_SYNC_AGENT = _setting(
     "CROSSPOINT_SYNC_AGENT",
-    # default: web/agent/sync_agent.py relative to this repo checkout
-    str(Path(__file__).resolve().parents[3] / "web" / "agent" / "sync_agent.py"),
+    "sync_agent",
+    REPO_SYNC_AGENT,
 )
 
 
@@ -315,6 +420,9 @@ def run_device_web_sync(device_host: str, web_host: str, web_token: str, agent_p
 
     A sleeping/offline device is not an error: the agent reports it and exits 0.
     """
+    if not device_host:
+        print("[warn] Skipping device<->web sync: no device host configured (CROSSPOINT_DEVICE).", file=sys.stderr)
+        return False
     if not web_host:
         print("[warn] Skipping device<->web sync: no web host configured (CROSSPOINT_WEB).", file=sys.stderr)
         return False
@@ -323,10 +431,11 @@ def run_device_web_sync(device_host: str, web_host: str, web_token: str, agent_p
         return False
 
     cmd = [sys.executable, agent_path, "--device", device_host, "--web", web_host]
+    child_env = os.environ.copy()
     if web_token:
-        cmd += ["--token", web_token]
+        child_env["CROSSPOINT_WEB_TOKEN"] = web_token
     print("[ok] Running device<->web sync pass...", flush=True)
-    return subprocess.run(cmd).returncode == 0
+    return subprocess.run(cmd, env=child_env).returncode == 0
 
 
 def _upload_to_web(web_host: str, web_token: str, deck_key: str, local_path: str, timeout_sec: int) -> str:
@@ -399,7 +508,10 @@ def _extract_markdown_pair_lines(lines: Sequence[str]) -> List[str]:
             current_deck = next((key for key, deck in DECKS.items() if deck.label.lower() == heading), None)
             continue
         if stripped.startswith("```"):
-            in_fence = not in_fence
+            if in_fence:
+                in_fence = False
+            else:
+                in_fence = stripped[3:].strip().lower() == "tsv"
             continue
         if not in_fence:
             continue
@@ -449,6 +561,14 @@ def _detect_decks(text: str) -> List[str]:
     german_score = 0
     english_score = 0
 
+    reliable_german_noun = len(tokens) == 1 and (
+        tokens[0] in GERMAN_NOUN_ARTICLES
+        or tokens[0].endswith(("keit", "heit", "schaft", "ung", "tät", "ität", "chen", "lein"))
+    )
+    if reliable_german_noun:
+        german_score += 3
+    if normalized.lower() in GERMAN_ARTICLE_PHRASES:
+        german_score += 4
     if any(ch in joined for ch in "äöüß"):
         german_score += 4
     if joined.startswith("sich "):
@@ -554,27 +674,35 @@ def collect_pairs_by_deck(
         added_to_any_deck = False
 
         for deck_key in deck_keys:
+            normalized_term = term
+            article_inserted = False
+            if deck_key == "german":
+                normalized_term, article_inserted = _normalize_german_term(term)
+                if article_inserted:
+                    summary.article_inserted_count += 1
+                    print(f"[ok] Added German article: '{term}' -> '{normalized_term}'")
+
             if explicit_translation is None:
                 source_lang = _source_lang_for_deck(deck_key, source_lang_override)
                 target_lang = _target_lang_for_deck(deck_key, target_lang_override)
-                cache_key = (term, source_lang, target_lang)
+                cache_key = (normalized_term, source_lang, target_lang)
                 if cache_key in translation_cache:
                     translation = translation_cache[cache_key]
                 else:
                     try:
-                        translation = _translate_mymemory(term, source_lang, target_lang, timeout_sec)
+                        translation = _translate_mymemory(normalized_term, source_lang, target_lang, timeout_sec)
                     except Exception as exc:
                         summary.translation_errors += 1
                         print(
-                            f"[warn] Auto-translation failed for '{term}' ({source_lang}->{target_lang}): {exc}",
+                            f"[warn] Auto-translation failed for '{normalized_term}' ({source_lang}->{target_lang}): {exc}",
                             file=sys.stderr,
                         )
                         continue
                     translation_cache[cache_key] = translation
                     summary.translated_count += 1
-                candidate = (term, translation)
+                candidate = (normalized_term, translation)
             else:
-                candidate = (term, explicit_translation)
+                candidate = (normalized_term, explicit_translation)
 
             if candidate in seen_by_deck[deck_key]:
                 continue
@@ -671,6 +799,29 @@ def sync_lines(
     normalized_host = _normalize_host(host)
     date_tag = date_tag or dt.date.today().isoformat()
 
+    web_enabled = bool(web_host) and not no_web_upload
+    device_awake = False
+    device_enabled = bool(normalized_host) and not no_upload
+    if not no_upload and not normalized_host:
+        if not web_enabled:
+            raise RuntimeError("No device host configured and web upload is disabled — nowhere to upload.")
+        print(
+            "[warn] No device host configured; uploading to web only.",
+            file=sys.stderr,
+        )
+    elif device_enabled:
+        device_awake = _device_awake(normalized_host)
+        if not device_awake:
+            if not web_enabled:
+                raise RuntimeError(
+                    f"Device at {normalized_host} is asleep/offline and web upload is disabled — nowhere to upload."
+                )
+            print(
+                f"[warn] Device at {normalized_host} is asleep/offline; uploading to web only. "
+                "It pulls new files and merges progress on its next wake sync.",
+                file=sys.stderr,
+            )
+
     for deck_key, pairs in pairs_by_deck.items():
         if not pairs:
             continue
@@ -685,7 +836,7 @@ def sync_lines(
         web_uploaded = False
         web_path = ""
         web_error: str | None = None
-        if web_host and not no_web_upload:
+        if web_enabled:
             try:
                 web_path = _upload_to_web(_normalize_host(web_host), web_token, deck_key, out_path, timeout_sec)
                 web_uploaded = True
@@ -694,7 +845,7 @@ def sync_lines(
                 print(f"[warn] Web upload failed for {deck_key}: {exc}", file=sys.stderr)
 
         uploaded = False
-        if not no_upload:
+        if device_enabled and device_awake:
             try:
                 _ensure_remote_path(normalized_host, remote_path, timeout_sec=timeout_sec)
                 status, payload = _upload_file(normalized_host, remote_path, out_path, timeout_sec=timeout_sec)
@@ -753,6 +904,8 @@ def _print_summary(summary: SyncSummary, host: str) -> None:
         print(f"[warn] Translation failures: {summary.translation_errors}")
     if summary.unrouted_lines:
         print(f"[warn] Unrouted lines: {summary.unrouted_lines}")
+    if summary.article_inserted_count:
+        print(f"[ok] German articles inserted: {summary.article_inserted_count}")
 
 
 def main() -> int:
@@ -762,8 +915,8 @@ def main() -> int:
     parser.add_argument("--output-dir", default=".", help="Local directory for generated TXT files.")
     parser.add_argument(
         "--host",
-        default=os.environ.get("CROSSPOINT_DEVICE", ""),
-        help="CrossPoint device base URL, e.g. http://192.168.1.50 (default: CROSSPOINT_DEVICE env).",
+        default=_setting("CROSSPOINT_DEVICE", "device"),
+        help="CrossPoint device base URL (default: CROSSPOINT_DEVICE env or ~/.crosspoint_sync/config.json).",
     )
     parser.add_argument("--target-path", default="/flashcards", help="Base remote flashcards folder.")
     parser.add_argument("--date", dest="date_override", help="Override date tag (YYYY-MM-DD) for reproducible runs.")
@@ -786,16 +939,17 @@ def main() -> int:
         action="store_true",
         help="Disable auto-translation for lines without explicit pairs.",
     )
-    parser.add_argument("--no-upload", action="store_true", help="Only generate local TXT files.")
+    parser.add_argument("--no-upload", action="store_true", help="Skip uploading to the device.")
     parser.add_argument(
         "--web-host",
-        default=os.environ.get("CROSSPOINT_WEB", ""),
-        help="Flashcards web app base URL (default: CROSSPOINT_WEB env). Empty disables web upload.",
+        default=_setting("CROSSPOINT_WEB", "web"),
+        help="Flashcards web app base URL (default: CROSSPOINT_WEB env or ~/.crosspoint_sync/config.json). "
+        "Empty disables web upload.",
     )
     parser.add_argument(
         "--web-token",
-        default=os.environ.get("CROSSPOINT_WEB_TOKEN", ""),
-        help="API token for the web app (default: CROSSPOINT_WEB_TOKEN env).",
+        default=_setting("CROSSPOINT_WEB_TOKEN", "web_token"),
+        help="API token for the web app (default: CROSSPOINT_WEB_TOKEN env or ~/.crosspoint_sync/config.json).",
     )
     parser.add_argument("--no-web-upload", action="store_true", help="Skip uploading decks to the web app.")
     parser.add_argument(
@@ -811,14 +965,9 @@ def main() -> int:
     parser.add_argument(
         "--sync-agent",
         default=DEFAULT_SYNC_AGENT,
-        help="Path to sync_agent.py (default: CROSSPOINT_SYNC_AGENT env or the crosspoint-flashcards-web checkout).",
+        help="Path to sync_agent.py (default: CROSSPOINT_SYNC_AGENT env or the crosspoint-reader-flashcards checkout).",
     )
     args = parser.parse_args()
-
-    if not args.host and not (args.no_upload and args.no_sync):
-        if args.sync_only or not args.no_upload or not args.no_sync:
-            print("ERROR: Set CROSSPOINT_DEVICE or pass --host (or use --no-upload --no-sync).", file=sys.stderr)
-            return 2
 
     if args.sync_only:
         ok = run_device_web_sync(_normalize_host(args.host), args.web_host, args.web_token, args.sync_agent)

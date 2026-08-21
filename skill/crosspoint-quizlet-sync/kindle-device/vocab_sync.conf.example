@@ -2,7 +2,7 @@
 # Copy to vocab_sync.conf (next to upload_vocab.sh) or /mnt/us/vocab_sync.conf.
 
 # Web app base URL (your Railway deployment running web/server.js):
-WEB_URL="https://crosspoint-flashcards-production.up.railway.app"
+WEB_URL="https://your-web-app.example"
 
 # Web app API token (the server's API_TOKEN):
 WEB_TOKEN="REPLACE_WITH_API_TOKEN"

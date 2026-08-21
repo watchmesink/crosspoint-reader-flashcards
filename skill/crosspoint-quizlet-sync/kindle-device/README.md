@@ -41,6 +41,7 @@ and needs your Amazon session. Ask and I can build that instead.)
 3. Copy `upload_vocab.sh` and a filled-in `vocab_sync.conf` (from
    `vocab_sync.conf.example`) to `/mnt/us/` on the Kindle:
    - set `WEB_URL` to your web app and `WEB_TOKEN` to its `API_TOKEN`.
+   - protect the token with `chmod 600 /mnt/us/vocab_sync.conf`.
 4. Make it executable and do a first manual test (over WiFi):
    ```sh
    sh /mnt/us/upload_vocab.sh && cat /mnt/us/vocab_sync.log

@@ -9,7 +9,7 @@ writes deck TXT files, and uploads them to the web app (and the device if awake)
 It then records the newest timestamp it processed so the next run only picks up
 words looked up since.
 
-Zero third-party dependencies (Python 3.8+ stdlib only).
+Zero third-party dependencies (Python 3.10+ stdlib only).
 
 Typical use (Kindle plugged in via USB):
 
@@ -264,7 +264,8 @@ def main() -> int:
     device = _resolve(args.device, "CROSSPOINT_DEVICE", "device", config)
 
     cmd = [sys.executable, args.quizlet_sync, "--prefix", args.prefix, "--output-dir", args.output_dir, "--timeout", str(args.timeout)]
-    use_device = device and not args.no_device
+    use_device = bool(device) and not args.no_device
+    use_web = bool(web) and not args.no_web_upload
     if use_device:
         cmd += ["--host", device]
     else:
@@ -272,10 +273,14 @@ def main() -> int:
         cmd += ["--no-upload", "--no-sync"]
     if args.no_sync and use_device:
         cmd += ["--no-sync"]
-    if web and not args.no_web_upload:
-        cmd += ["--web-host", web, "--web-token", token]
+    if use_web:
+        cmd += ["--web-host", web]
     else:
         cmd += ["--no-web-upload"]
+
+    child_env = os.environ.copy()
+    if token:
+        child_env["CROSSPOINT_WEB_TOKEN"] = token
 
     stdin_text = "\n".join(lines) + "\n"
 
@@ -285,12 +290,12 @@ def main() -> int:
         print(stdin_text, end="")
         return 0
 
-    if not web and args.no_device:
-        print("ERROR: nothing to upload to (no web host and --no-device).", file=sys.stderr)
+    if not use_device and not use_web:
+        print("ERROR: nothing to upload to; configure a device or web host.", file=sys.stderr)
         return 2
 
     print(f"[ok] Handing {len(lines)} term(s) to quizlet_sync (auto-translate + upload)...", flush=True)
-    result = subprocess.run(cmd, input=stdin_text, text=True)
+    result = subprocess.run(cmd, input=stdin_text, text=True, env=child_env)
     if result.returncode != 0:
         print(f"ERROR: quizlet_sync exited {result.returncode}; state not advanced (will retry these words next run).", file=sys.stderr)
         return result.returncode

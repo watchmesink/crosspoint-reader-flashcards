@@ -1,0 +1,4 @@
+interface:
+  display_name: "CrossPoint Quizlet Sync"
+  short_description: "Build and sync CrossPoint flashcard decks"
+  default_prompt: "Use $crosspoint-quizlet-sync to turn vocabulary or Kindle lookups into flashcard decks and sync them with CrossPoint."

@@ -7,7 +7,7 @@
   no-ops quickly when no Kindle is present.
 
   Install:
-    1) Edit __SCRIPT_PATH__ below to the absolute path of kindle_vocab_sync.py.
+    1) Edit __PYTHON_PATH__ and __SCRIPT_PATH__ below to absolute paths.
     2) Ensure ~/.crosspoint_sync/config.json has web / web_token / device (mode 600),
        OR add CROSSPOINT_WEB / CROSSPOINT_WEB_TOKEN / CROSSPOINT_DEVICE under
        EnvironmentVariables here.
@@ -21,7 +21,7 @@
   <string>com.crosspoint.kindle-vocab-sync</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>__PYTHON_PATH__</string>
     <string>__SCRIPT_PATH__</string>
   </array>
   <key>WatchPaths</key>

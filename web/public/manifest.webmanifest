@@ -4,8 +4,8 @@
   "description": "Flashcards synced with the Xteink X4 CrossPoint reader",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f7f6f3",
-  "theme_color": "#f7f6f3",
+  "background_color": "#f2efe6",
+  "theme_color": "#f2efe6",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]

@@ -17,7 +17,7 @@ const DECKS = [
   { id: 'ukrainian', label: 'Ukrainian' },
   { id: 'english', label: 'English' },
 ];
-const CODES = { german: 'DE', ukrainian: 'UA', english: 'EN' };
+const FLAGS = { german: '\u{1F1E9}\u{1F1EA}', ukrainian: '\u{1F1FA}\u{1F1E6}', english: '\u{1F1EC}\u{1F1E7}' };
 const flame = (n) => (n > 0 ? '\u{1F525}' + n : '');
 // server sends device-parity memory strings ("Memory: Young | EF 2.50 | Ivl 6")
 const memoryLabel = (s) => (s || '').replace(/^Memory:\s*/, '').replace(/\s*\|\s*/g, ' · ');
@@ -425,25 +425,33 @@ async function showDeckList() {
   $('streak').textContent = flame(Math.max(...decks.map((d) => d.streakDays), 0));
 
   const list = document.createElement('div');
-  list.className = 'ruled';
+  list.className = 'group';
   for (const d of decks) {
     const el = document.createElement('button');
-    el.className = 'deck-row';
+    el.className = 'row';
     el.innerHTML = `
-      <span class="deck-code">${CODES[d.deck] || '??'}</span>
-      <span class="deck-name">${d.label}</span>
-      ${d.dueNow > 0 ? `<span class="deck-due">${d.dueNow} due</span>` : ''}
-      <span class="deck-meta mono">${d.memorized}/${d.total} known &middot; ${d.files} files &middot; sync ${timeAgo(d.lastSyncAt)}</span>`;
+      <span class="avatar">${FLAGS[d.deck] || '\u{1F0CF}'}</span>
+      <span class="row-main">
+        <span class="row-title">${d.label}</span>
+        <span class="row-sub">${d.memorized}/${d.total} known &middot; ${d.files} files &middot; synced ${timeAgo(d.lastSyncAt)}</span>
+      </span>
+      ${d.dueNow > 0 ? `<span class="due-pill">${d.dueNow} due</span>` : '<span class="chevron">&#8250;</span>'}`;
     el.onclick = () => nav('/deck/' + d.deck);
     list.appendChild(el);
   }
   main.appendChild(list);
 
+  const settingsGroup = document.createElement('div');
+  settingsGroup.className = 'group';
   const settingsBtn = document.createElement('button');
-  settingsBtn.className = 'key quiet';
-  settingsBtn.textContent = 'Settings';
+  settingsBtn.className = 'row';
+  settingsBtn.innerHTML = `
+    <span class="avatar">&#9881;&#65039;</span>
+    <span class="row-main"><span class="row-title">Settings</span></span>
+    <span class="chevron">&#8250;</span>`;
   settingsBtn.onclick = () => nav('/settings');
-  main.appendChild(settingsBtn);
+  settingsGroup.appendChild(settingsBtn);
+  main.appendChild(settingsGroup);
 }
 
 async function showDeckHome(deck) {
@@ -453,14 +461,25 @@ async function showDeckHome(deck) {
   main.classList.remove('no-scroll');
   main.innerHTML = '';
 
+  const tiles = document.createElement('div');
+  tiles.className = 'tiles';
+  tiles.innerHTML = `
+    <div class="tile">
+      <div class="tile-num">${v.memorized}<span class="tile-den"> / ${v.total}</span></div>
+      <div class="tile-label">Known</div>
+    </div>
+    <div class="tile">
+      <div class="tile-num">${v.streakDays ? '\u{1F525} ' + v.streakDays : '&mdash;'}</div>
+      <div class="tile-label">Streak</div>
+    </div>`;
+  main.appendChild(tiles);
+
   const stats = document.createElement('div');
-  stats.className = 'ruled';
+  stats.className = 'group';
   stats.innerHTML = `
-    <div class="stat-row"><span>Known</span><b>${v.memorized} / ${v.total}</b></div>
-    <div class="stat-row"><span>Streak</span><b>${v.streakDays ? v.streakDays + (v.streakDays === 1 ? ' day' : ' days') : '&mdash;'}</b></div>
-    <div class="stat-row"><span>Batch</span><b>${v.batchProcessed} of ${v.batchSize} done</b></div>
-    <div class="stat-row"><span>Reviews</span><b>${v.reviewStep}</b></div>
-    <div class="stat-row"><span>Last sync</span><b>${timeAgo(v.lastSyncAt)}</b></div>`;
+    <div class="row"><span class="row-main"><span class="row-title">Batch</span></span><span class="row-sub">${v.batchProcessed} of ${v.batchSize} done</span></div>
+    <div class="row"><span class="row-main"><span class="row-title">Reviews</span></span><span class="row-sub">${v.reviewStep}</span></div>
+    <div class="row"><span class="row-main"><span class="row-title">Last sync</span></span><span class="row-sub">${timeAgo(v.lastSyncAt)}</span></div>`;
   main.appendChild(stats);
 
   if (v.total === 0) {
@@ -470,14 +489,14 @@ async function showDeckHome(deck) {
     main.appendChild(empty);
   } else {
     const learn = document.createElement('button');
-    learn.className = 'key solid';
+    learn.className = 'btn primary';
     learn.textContent = v.dueNow > 0 ? `Study · ${v.dueNow} due` : 'Study';
     learn.onclick = () => nav('/deck/' + deck + '/study');
     main.appendChild(learn);
   }
 
   const files = document.createElement('button');
-  files.className = 'key';
+  files.className = 'btn';
   files.textContent = 'Files';
   files.onclick = () => nav('/deck/' + deck + '/files');
   main.appendChild(files);
@@ -491,15 +510,18 @@ async function showStudy(deck) {
   const main = $('main');
   main.classList.add('no-scroll');
   main.innerHTML = `
-    <div class="study-bar">
-      <span id="counter"></span>
-      <span id="memoryLine"></span>
+    <div class="study-top">
+      <div class="progress"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="study-meta">
+        <span id="counter"></span>
+        <span id="memoryLine"></span>
+      </div>
     </div>
     <div class="card-wrap">
       <div class="card" id="card">
         <div class="face prompt">
           <div class="word" id="promptText"></div>
-          <div class="hint">tap to reveal</div>
+          <div class="hint">Tap to reveal</div>
         </div>
         <div class="face answer">
           <div class="word" id="answerText"></div>
@@ -507,9 +529,9 @@ async function showStudy(deck) {
       </div>
     </div>
     <div class="rate-row">
-      <button class="key accent" id="rateHard">Hard</button>
-      <button class="key" id="rateGood">Good</button>
-      <button class="key solid" id="rateEasy">Easy</button>
+      <button class="btn hard" id="rateHard">Hard</button>
+      <button class="btn good" id="rateGood">Good</button>
+      <button class="btn easy" id="rateEasy">Easy</button>
     </div>`;
 
   const card = $('card');
@@ -518,13 +540,14 @@ async function showStudy(deck) {
   function fitWord(el, text) {
     el.textContent = text;
     const len = text.length;
-    el.style.fontSize = len > 120 ? '22px' : len > 60 ? '26px' : len > 30 ? '32px' : '42px';
+    el.style.fontSize = len > 120 ? '21px' : len > 60 ? '25px' : len > 30 ? '31px' : '40px';
   }
 
   function renderCurrent() {
     const c = v.current;
-    $('counter').textContent = `${c.batchPosition} / ${v.batchSize || 1} · ${v.batchProcessed} done`;
+    $('counter').textContent = `Card ${c.batchPosition} of ${v.batchSize || 1}`;
     $('memoryLine').textContent = memoryLabel(c.memoryLine);
+    $('progressFill').style.width = `${Math.round((v.batchProcessed / (v.batchSize || 1)) * 100)}%`;
     card.classList.remove('flipped');
     fitWord($('promptText'), c.prompt);
     fitWord($('answerText'), c.answer);
@@ -560,23 +583,26 @@ async function showFiles(deck) {
   const upload = document.createElement('div');
   upload.innerHTML = `
     <input type="file" id="filePick" accept=".txt" multiple class="hidden">
-    <button class="key" id="uploadBtn">Upload .txt</button>
-    <p class="sub" style="margin:16px 0 8px">or paste cards</p>
+    <button class="btn" id="uploadBtn">Upload .txt files</button>
+    <p class="sub" style="margin:14px 0 8px">or paste cards</p>
     <textarea id="pasteArea" placeholder="der Hund&#9;the dog&#10;die Katze&#9;the cat"></textarea>
     <div style="height:10px"></div>
-    <button class="key solid" id="pasteSave">Save cards</button>`;
+    <button class="btn primary" id="pasteSave">Save cards</button>`;
   main.appendChild(upload);
 
   const list = document.createElement('div');
-  list.className = 'ruled';
+  list.className = 'group';
   main.appendChild(list);
 
   for (const f of files) {
     const row = document.createElement('div');
-    row.className = 'file-row';
+    row.className = 'row';
+    row.style.cursor = 'default';
     row.innerHTML = `
-      <span class="file-name">${f.name}</span>
-      <span class="file-size">${(f.content.length / 1024).toFixed(1)} KB${f.dirty ? ' · unsynced' : ''}</span>
+      <span class="row-main file-name" style="cursor:pointer">
+        <span class="row-title" style="font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${f.name}</span>
+        <span class="row-sub">${(f.content.length / 1024).toFixed(1)} KB${f.dirty ? ' · not synced yet' : ''}</span>
+      </span>
       <button class="file-del">&#10005;</button>`;
     row.querySelector('.file-name').onclick = async () => {
       const content = await localFileGet(deck, f.name);
@@ -622,16 +648,16 @@ async function showSettings() {
   main.classList.remove('no-scroll');
   const s = await getSettings();
   main.innerHTML = `
-    <div class="setting-group">
+    <div class="group pad">
       <label class="setting-label" for="batchSizeInput">Cards per batch</label>
       <div class="setting-inline">
         <input type="number" id="batchSizeInput" min="${s.minBatchSize}" max="${s.maxBatchSize}"
                step="1" inputmode="numeric" value="${s.batchSize}">
         <span class="setting-range">${s.minBatchSize}&ndash;${s.maxBatchSize}</span>
       </div>
-      <p class="sub" style="text-align:left; margin:6px 2px 0">Cards per study batch, here and on the device after its next sync.</p>
+      <p class="sub" style="text-align:left; margin:10px 2px 0">Cards per study batch, here and on the device after its next sync.</p>
     </div>
-    <button class="key solid" id="settingsSave" type="button">Save</button>`;
+    <button class="btn primary" id="settingsSave" type="button">Save</button>`;
 
   $('settingsSave').onclick = async () => {
     const btn = $('settingsSave');

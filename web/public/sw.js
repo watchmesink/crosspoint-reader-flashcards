@@ -5,7 +5,7 @@
 // API calls are never cached: the client talks to the network only to reconcile,
 // and falls back to local data when offline.
 
-const VERSION = 'v4';
+const VERSION = 'v5'; // ink-on-paper redesign + scheduler/streak fixes
 const CACHE = `cp-shell-${VERSION}`;
 const SHELL = [
   '/',

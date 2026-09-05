@@ -6,10 +6,24 @@ two-way sync with the device. It is an installable PWA: once loaded online it
 studies fully offline (service worker shell + IndexedDB) and reconciles with the
 server whenever the network returns.
 
-The scheduling engine (`engine.js`) is an exact port of
+The scheduling engine (`engine.js`) is a port of
 `src/activities/flashcards/FlashcardsActivity.cpp` and is **isomorphic** — the
 same source runs on the Node server and in the browser (a `Buffer`/`Uint8Array`
-shim keeps the device bin byte-identical either way):
+shim keeps the device bin byte-identical either way).
+
+Two deliberate web-side divergences from the firmware (progress state stays
+byte-compatible):
+
+- **New uploads surface immediately**: each new batch reserves up to half its
+  slots for never-reviewed cards from the newest files. The plain firmware ring
+  would otherwise show a fresh upload only after a full rotation of the deck
+  (~total/batchSize completed batches — weeks on a large deck).
+- **Timezone-aware streak**: the server counts study days in `STREAK_TZ` (env
+  var, IANA name like `Europe/Berlin`, default UTC), so studying just after
+  local midnight no longer creates phantom gap days, and a lapsed streak is
+  reported as 0 instead of the stale last value.
+
+Firmware behavior otherwise preserved:
 
 - Decks: `german`, `ukrainian`, `english`; cards are `prompt<TAB>translation`
   lines in `.txt` files (`#` comments, fallback split on last comma).

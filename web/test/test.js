@@ -178,6 +178,43 @@ test('batch creation wraps and advances offset', () => {
   assert.strictEqual(state.nextBatchStartOffset, 10);
 });
 
+test('new batches reserve half for never-reviewed cards from newest files', () => {
+  const files = [
+    { name: 'a-old.txt', content: Array.from({ length: 30 }, (_, i) => `old${i}\tx${i}`).join('\n'), mtime: 1000 },
+    { name: 'z-new.txt', content: Array.from({ length: 10 }, (_, i) => `new${i}\ty${i}`).join('\n'), mtime: 2000 },
+  ];
+  const { cards } = engine.parseDeckFiles(files);
+  const state = engine.newDeckState();
+  for (const c of cards.slice(0, 30)) engine.findOrCreateRecord(state, c.key).reviewCount = 1;
+  state.nextBatchStartOffset = 5; // ring pointer sits among already-studied cards
+  engine.createNextBatch(state, cards, 10);
+  const prompts = state.batch.map((b) => cards.find((c) => c.key === b.key).prompt);
+  assert.deepStrictEqual(prompts.slice(0, 5), ['old5', 'old6', 'old7', 'old8', 'old9']);
+  // newest file first, original line order preserved
+  assert.deepStrictEqual(prompts.slice(5), ['new0', 'new1', 'new2', 'new3', 'new4']);
+  // pointer advanced only past the consumed ring cards — nothing skipped
+  assert.strictEqual(state.nextBatchStartOffset, 10);
+});
+
+test('fresh decks batch exactly like the firmware (no unseen top-up)', () => {
+  const cards = mkCards(30);
+  const state = engine.newDeckState();
+  engine.createNextBatch(state, cards, 10);
+  assert.deepStrictEqual(state.batch.map((b) => b.key), cards.slice(0, 10).map((c) => c.key));
+  assert.strictEqual(state.nextBatchStartOffset, 10);
+});
+
+test('streak accepts an explicit timezone-local day', () => {
+  const state = engine.newDeckState();
+  engine.updateStudyStreak(state, 0, 100);
+  assert.strictEqual(state.streakDays, 1);
+  assert.strictEqual(state.lastStudyUnixDay, 100);
+  engine.updateStudyStreak(state, 0, 101);
+  assert.strictEqual(state.streakDays, 2);
+  engine.updateStudyStreak(state, 0, 103);
+  assert.strictEqual(state.streakDays, 1); // gap resets
+});
+
 test('normalizeBatchSize clamps to [1,20] and defaults on non-finite input', () => {
   assert.strictEqual(engine.normalizeBatchSize(7), 7);
   assert.strictEqual(engine.normalizeBatchSize(0), 1);

@@ -17,7 +17,23 @@ const DECKS = [
   { id: 'ukrainian', label: 'Ukrainian' },
   { id: 'english', label: 'English' },
 ];
-const FLAGS = { german: '\u{1F1E9}\u{1F1EA}', ukrainian: '\u{1F1FA}\u{1F1E6}', english: '\u{1F1EC}\u{1F1E7}' };
+const CODES = { german: 'DE', ukrainian: 'UA', english: 'EN' };
+const flame = (n) => (n > 0 ? '\u{1F525}' + n : '');
+// server sends device-parity memory strings ("Memory: Young | EF 2.50 | Ivl 6")
+const memoryLabel = (s) => (s || '').replace(/^Memory:\s*/, '').replace(/\s*\|\s*/g, ' · ');
+
+// Streak days follow the browser's local calendar, not UTC: studying just after
+// midnight must count as the new local day or daily streaks show phantom gaps.
+function browserUnixDay(nowMs = Date.now()) {
+  const d = new Date(nowMs);
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+}
+// The stored streak only updates on rating; a lapsed streak shows 0, not the
+// stale last value.
+function effectiveStreakDays(state) {
+  if (!state || state.lastStudyUnixDay < 0) return 0;
+  return browserUnixDay() - state.lastStudyUnixDay > 1 ? 0 : state.streakDays;
+}
 
 // ---- token ----------------------------------------------------------------
 let token = localStorage.getItem('cp_token') || '';
@@ -146,7 +162,7 @@ async function localDeckList() {
       label: d.label,
       total: cards.length,
       memorized: E.countMemorized(state, cards),
-      streakDays: state.streakDays,
+      streakDays: effectiveStreakDays(state),
       reviewStep: state.reviewStep,
       dueNow: E.countDue(state),
       files: (await filesForDeck(d.id)).length,
@@ -162,7 +178,7 @@ function viewFrom(deck, label, cards, state, meta) {
     label,
     total: cards.length,
     memorized: E.countMemorized(state, cards),
-    streakDays: state.streakDays,
+    streakDays: effectiveStreakDays(state),
     reviewStep: state.reviewStep,
     batchSize: state.batch.length,
     batchProcessed: state.batch.filter((b) => b.processed).length,
@@ -183,7 +199,7 @@ async function localDeckView(deck) {
 async function localRate(deck, key, rating) {
   const def = DECKS.find((d) => d.id === deck);
   const { cards, state } = await loadLocalDeck(deck);
-  if (!E.rateCard(state, cards, key, E.RATING[rating.toUpperCase()], Date.now(), await getBatchSize())) throw new Error('card not found');
+  if (!E.rateCard(state, cards, key, E.RATING[rating.toUpperCase()], Date.now(), await getBatchSize(), browserUnixDay())) throw new Error('card not found');
   state.deck = deck;
   await idbPut('state', state);
   const meta = (await idbGet('meta', deck)) || {};
@@ -367,11 +383,11 @@ async function setStatus(kind) {
   const el = $('status');
   if (!el) return;
   el.dataset.kind = kind;
-  if (kind === 'syncing') { el.textContent = '↻ syncing'; return; }
-  if (kind === 'offline') { el.textContent = '⚡ offline'; return; }
-  if (kind === 'locked') { el.textContent = '\u{1F512} sync'; return; }
+  if (kind === 'syncing') { el.textContent = 'syncing…'; return; }
+  if (kind === 'offline') { el.textContent = 'offline'; return; }
+  if (kind === 'locked') { el.textContent = 'locked'; return; }
   const last = await kvGet('lastSyncAt');
-  el.textContent = '✓ ' + (last ? 'synced ' + timeAgo(last) : 'synced');
+  el.textContent = last ? 'synced ' + timeAgo(last) : 'synced';
 }
 
 // ---- routing --------------------------------------------------------------
@@ -406,62 +422,63 @@ async function showDeckList() {
   const main = $('main');
   main.classList.remove('no-scroll');
   main.innerHTML = '';
-  const maxStreak = Math.max(...decks.map((d) => d.streakDays), 0);
-  $('streak').textContent = maxStreak > 0 ? '\u{1F525} ' + maxStreak : '';
+  $('streak').textContent = flame(Math.max(...decks.map((d) => d.streakDays), 0));
+
+  const list = document.createElement('div');
+  list.className = 'ruled';
   for (const d of decks) {
-    const el = document.createElement('div');
-    el.className = 'deck-card';
+    const el = document.createElement('button');
+    el.className = 'deck-row';
     el.innerHTML = `
-      <div class="deck-flag">${FLAGS[d.deck] || '\u{1F0CF}'}</div>
-      <div class="deck-info">
-        <div class="deck-name">${d.label}</div>
-        <div class="deck-meta">${d.memorized}/${d.total} memorized · ${d.files} files · sync ${timeAgo(d.lastSyncAt)}</div>
-      </div>
-      ${d.dueNow > 0 ? `<div class="deck-due">${d.dueNow} due</div>` : ''}`;
+      <span class="deck-code">${CODES[d.deck] || '??'}</span>
+      <span class="deck-name">${d.label}</span>
+      ${d.dueNow > 0 ? `<span class="deck-due">${d.dueNow} due</span>` : ''}
+      <span class="deck-meta mono">${d.memorized}/${d.total} known &middot; ${d.files} files &middot; sync ${timeAgo(d.lastSyncAt)}</span>`;
     el.onclick = () => nav('/deck/' + d.deck);
-    main.appendChild(el);
+    list.appendChild(el);
   }
+  main.appendChild(list);
 
   const settingsBtn = document.createElement('button');
-  settingsBtn.className = 'btn secondary';
-  settingsBtn.textContent = '⚙️ Settings';
+  settingsBtn.className = 'key quiet';
+  settingsBtn.textContent = 'Settings';
   settingsBtn.onclick = () => nav('/settings');
   main.appendChild(settingsBtn);
 }
 
 async function showDeckHome(deck) {
   const v = await localDeckView(deck);
-  setHeader(`${FLAGS[deck] || ''} ${v.label}`, { back: true, streak: v.streakDays ? '\u{1F525} ' + v.streakDays : '' });
+  setHeader(v.label, { back: true, streak: flame(v.streakDays) });
   const main = $('main');
   main.classList.remove('no-scroll');
   main.innerHTML = '';
 
   const stats = document.createElement('div');
-  stats.className = 'stat-block';
+  stats.className = 'ruled';
   stats.innerHTML = `
-    <div class="stat-row"><span>Memorized cards</span><b>${v.memorized} / ${v.total}</b></div>
-    <div class="stat-row"><span>Streak</span><b>${v.streakDays} day${v.streakDays === 1 ? '' : 's'}</b></div>
-    <div class="stat-row"><span>Current batch</span><b>${v.batchProcessed} / ${v.batchSize} done</b></div>
-    <div class="stat-row"><span>Total reviews</span><b>${v.reviewStep}</b></div>
+    <div class="stat-row"><span>Known</span><b>${v.memorized} / ${v.total}</b></div>
+    <div class="stat-row"><span>Streak</span><b>${v.streakDays ? v.streakDays + (v.streakDays === 1 ? ' day' : ' days') : '&mdash;'}</b></div>
+    <div class="stat-row"><span>Batch</span><b>${v.batchProcessed} of ${v.batchSize} done</b></div>
+    <div class="stat-row"><span>Reviews</span><b>${v.reviewStep}</b></div>
     <div class="stat-row"><span>Last sync</span><b>${timeAgo(v.lastSyncAt)}</b></div>`;
   main.appendChild(stats);
 
   if (v.total === 0) {
     const empty = document.createElement('p');
     empty.className = 'sub';
-    empty.textContent = 'No flashcards yet. Upload .txt files (term\\ttranslation per line).';
+    empty.innerHTML = 'No cards yet &mdash; upload a .txt,<br>one term&#8677;translation per line.';
     main.appendChild(empty);
   } else {
     const learn = document.createElement('button');
-    learn.className = 'btn primary';
-    learn.textContent = v.dueNow > 0 ? `Learn (${v.dueNow} due)` : 'Learn';
+    learn.className = 'key solid';
+    learn.textContent = v.dueNow > 0 ? `Study · ${v.dueNow} due` : 'Study';
     learn.onclick = () => nav('/deck/' + deck + '/study');
     main.appendChild(learn);
   }
 
   const files = document.createElement('button');
-  files.className = 'btn secondary';
-  files.textContent = 'Files (' + (v.total === 0 ? 'upload' : 'manage') + ')';
+  files.className = 'key';
+  files.textContent = 'Files';
   files.onclick = () => nav('/deck/' + deck + '/files');
   main.appendChild(files);
 }
@@ -469,33 +486,30 @@ async function showDeckHome(deck) {
 async function showStudy(deck) {
   let v = await localDeckView(deck);
   if (!v.current) { nav('/deck/' + deck); return; }
-  setHeader(`${FLAGS[deck] || ''} ${v.label}`, { back: true });
+  setHeader(v.label, { back: true });
 
   const main = $('main');
   main.classList.add('no-scroll');
   main.innerHTML = `
-    <div class="study-top">
-      <div class="counter" id="counter"></div>
-      <div class="memory" id="memoryLine"></div>
+    <div class="study-bar">
+      <span id="counter"></span>
+      <span id="memoryLine"></span>
     </div>
     <div class="card-wrap">
       <div class="card" id="card">
         <div class="face prompt">
-          <div class="side-label">Prompt</div>
           <div class="word" id="promptText"></div>
-          <div class="hint">tap to flip</div>
+          <div class="hint">tap to reveal</div>
         </div>
         <div class="face answer">
-          <div class="side-label">Translation</div>
           <div class="word" id="answerText"></div>
-          <div class="hint">tap to flip back</div>
         </div>
       </div>
     </div>
     <div class="rate-row">
-      <button class="btn hard" id="rateHard">Hard</button>
-      <button class="btn good" id="rateGood">Good</button>
-      <button class="btn easy" id="rateEasy">Easy</button>
+      <button class="key accent" id="rateHard">Hard</button>
+      <button class="key" id="rateGood">Good</button>
+      <button class="key solid" id="rateEasy">Easy</button>
     </div>`;
 
   const card = $('card');
@@ -504,13 +518,13 @@ async function showStudy(deck) {
   function fitWord(el, text) {
     el.textContent = text;
     const len = text.length;
-    el.style.fontSize = len > 120 ? '20px' : len > 60 ? '24px' : len > 30 ? '30px' : '38px';
+    el.style.fontSize = len > 120 ? '22px' : len > 60 ? '26px' : len > 30 ? '32px' : '42px';
   }
 
   function renderCurrent() {
     const c = v.current;
-    $('counter').textContent = `Card ${c.batchPosition}/${v.batchSize || 1} · batch ${v.batchProcessed}/${v.batchSize} done`;
-    $('memoryLine').textContent = c.memoryLine;
+    $('counter').textContent = `${c.batchPosition} / ${v.batchSize || 1} · ${v.batchProcessed} done`;
+    $('memoryLine').textContent = memoryLabel(c.memoryLine);
     card.classList.remove('flipped');
     fitWord($('promptText'), c.prompt);
     fitWord($('answerText'), c.answer);
@@ -520,7 +534,7 @@ async function showStudy(deck) {
     for (const id of ['rateHard', 'rateGood', 'rateEasy']) $(id).disabled = true;
     try {
       v = await localRate(deck, v.current.key, rating);
-      $('streak').textContent = v.streakDays ? '\u{1F525} ' + v.streakDays : '';
+      $('streak').textContent = flame(v.streakDays);
       if (!v.current) { nav('/deck/' + deck); return; }
       renderCurrent();
     } catch (e) {
@@ -546,17 +560,15 @@ async function showFiles(deck) {
   const upload = document.createElement('div');
   upload.innerHTML = `
     <input type="file" id="filePick" accept=".txt" multiple class="hidden">
-    <button class="btn secondary" id="uploadBtn">Upload .txt files</button>
-    <p class="sub" style="margin:14px 0 6px">or paste cards (term<b>&#8677;TAB</b>translation per line)</p>
+    <button class="key" id="uploadBtn">Upload .txt</button>
+    <p class="sub" style="margin:16px 0 8px">or paste cards</p>
     <textarea id="pasteArea" placeholder="der Hund&#9;the dog&#10;die Katze&#9;the cat"></textarea>
-    <div style="height:8px"></div>
-    <button class="btn" id="pasteSave">Save pasted cards</button>`;
+    <div style="height:10px"></div>
+    <button class="key solid" id="pasteSave">Save cards</button>`;
   main.appendChild(upload);
 
   const list = document.createElement('div');
-  list.style.display = 'flex';
-  list.style.flexDirection = 'column';
-  list.style.gap = '8px';
+  list.className = 'ruled';
   main.appendChild(list);
 
   for (const f of files) {
@@ -615,11 +627,11 @@ async function showSettings() {
       <div class="setting-inline">
         <input type="number" id="batchSizeInput" min="${s.minBatchSize}" max="${s.maxBatchSize}"
                step="1" inputmode="numeric" value="${s.batchSize}">
-        <span class="setting-range">${s.minBatchSize}–${s.maxBatchSize}</span>
+        <span class="setting-range">${s.minBatchSize}&ndash;${s.maxBatchSize}</span>
       </div>
-      <p class="sub" style="text-align:left; margin:10px 2px 0">How many cards each study batch draws. Applies on the device too after the next sync.</p>
+      <p class="sub" style="text-align:left; margin:6px 2px 0">Cards per study batch, here and on the device after its next sync.</p>
     </div>
-    <button class="btn primary" id="settingsSave" type="button">Save</button>`;
+    <button class="key solid" id="settingsSave" type="button">Save</button>`;
 
   $('settingsSave').onclick = async () => {
     const btn = $('settingsSave');

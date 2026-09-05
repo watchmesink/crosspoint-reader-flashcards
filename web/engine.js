@@ -1,8 +1,15 @@
 'use strict';
-// Exact port of the CrossPoint firmware flashcards engine
+// Port of the CrossPoint firmware flashcards engine
 // (src/activities/flashcards/FlashcardsActivity.cpp, branch codex/flashcards-0.1.13-push).
 // "Time" is the per-deck reviewStep counter, not wall clock. Card identity is the
 // FNV-1a hash of "prompt\tanswer" UTF-8 bytes, so progress survives file renames.
+//
+// Two deliberate web-side divergences from the firmware (state stays byte-compatible):
+// 1. createNextBatch reserves up to half of each new batch for never-reviewed cards
+//    from the newest files — otherwise a fresh upload waits up to a full ring
+//    rotation (~total/batchSize completed batches) before it is ever shown.
+// 2. updateStudyStreak/rateCard accept an optional precomputed unix day so the
+//    server can count study days in the user's timezone instead of UTC.
 
 const PROGRESS_VERSION = 6;
 const MAX_FLASHCARDS_TOTAL = 900;
@@ -155,6 +162,7 @@ function parseDeckFiles(files /* [{name, content}] */) {
 
   for (const file of sorted) {
     const countBefore = cards.length;
+    const fileMtime = file.mtime || 0; // used to surface newest uploads first
     for (const rawLine of file.content.split('\n')) {
       const line = asciiTrim(rawLine.replace(/\r/g, ''));
       if (!line || line[0] === '#') continue;
@@ -168,7 +176,7 @@ function parseDeckFiles(files /* [{name, content}] */) {
       if (seen.has(key)) { duplicateLines++; continue; }
       if (cards.length >= MAX_FLASHCARDS_TOTAL) { reachedLimit = true; break; }
       seen.add(key);
-      cards.push({ key, prompt, answer });
+      cards.push({ key, prompt, answer, fileMtime });
     }
     if (cards.length > countBefore) filesWithCards++;
     if (reachedLimit) break;
@@ -399,8 +407,10 @@ function currentUnixDay(nowMs = Date.now()) {
   return Math.floor(nowMs / 1000 / 86400);
 }
 
-function updateStudyStreak(state, nowMs = Date.now()) {
-  const currentDay = currentUnixDay(nowMs);
+// unixDay lets the caller define the day boundary (e.g. the user's timezone
+// instead of UTC); the firmware semantics are unchanged otherwise.
+function updateStudyStreak(state, nowMs = Date.now(), unixDay = undefined) {
+  const currentDay = unixDay !== undefined ? unixDay : currentUnixDay(nowMs);
   if (currentDay < 0) return;
   if (state.lastStudyUnixDay < 0) {
     state.streakDays = 1;
@@ -424,10 +434,38 @@ function createNextBatch(state, cards, requestedBatchSize = BATCH_SIZE) {
   const total = cards.length;
   const batchSize = Math.min(normalizeBatchSize(requestedBatchSize), total);
   const start = state.nextBatchStartOffset % total;
-  for (let i = 0; i < batchSize; i++) {
-    state.batch.push({ key: cards[(start + i) % total].key, processed: 0 });
+
+  const recByKey = new Map(state.records.map((r) => [r.key, r]));
+  const isUnseen = (card) => {
+    const rec = recByKey.get(card.key);
+    return !rec || rec.reviewCount === 0;
+  };
+
+  // Classic firmware ring window.
+  const ring = [];
+  for (let i = 0; i < batchSize; i++) ring.push(cards[(start + i) % total]);
+
+  // Web divergence: if the ring window alone would show fewer than
+  // ceil(batchSize/2) never-reviewed cards, top the batch up with unseen cards
+  // from the newest files so fresh uploads appear in the very next batch.
+  const ringKeys = new Set(ring.map((c) => c.key));
+  const ringUnseen = ring.filter(isUnseen).length;
+  const quota = Math.ceil(batchSize / 2);
+  let fresh = [];
+  if (ringUnseen < quota) {
+    fresh = cards
+      .map((card, index) => ({ card, index }))
+      .filter(({ card }) => isUnseen(card) && !ringKeys.has(card.key))
+      .sort((a, b) => (b.card.fileMtime || 0) - (a.card.fileMtime || 0) || a.index - b.index)
+      .slice(0, quota - ringUnseen)
+      .map(({ card }) => card);
   }
-  state.nextBatchStartOffset = (start + batchSize) % total;
+
+  const ringTake = batchSize - fresh.length;
+  for (let i = 0; i < ringTake; i++) state.batch.push({ key: ring[i].key, processed: 0 });
+  for (const card of fresh) state.batch.push({ key: card.key, processed: 0 });
+  // Advance only past the ring cards actually consumed, so no card is skipped.
+  state.nextBatchStartOffset = (start + ringTake) % total;
 }
 
 function isBatchComplete(state) {
@@ -497,7 +535,7 @@ function selectNextCard(state, cards, includeFutureCards, requestedBatchSize = B
 
 // Mirrors rateCurrentCard(): rating semantics are device buttons Hard/Good/Easy.
 // A batch entry is only marked processed by an EASY rating.
-function rateCard(state, cards, key, rating, nowMs = Date.now(), requestedBatchSize = BATCH_SIZE) {
+function rateCard(state, cards, key, rating, nowMs = Date.now(), requestedBatchSize = BATCH_SIZE, unixDay = undefined) {
   const card = cards.find((c) => c.key === key);
   if (!card) return false;
 
@@ -510,7 +548,7 @@ function rateCard(state, cards, key, rating, nowMs = Date.now(), requestedBatchS
   if (rating === RATING.EASY && rec.easyCount < 65535) rec.easyCount++;
 
   applySm2pp(state, rec, rating);
-  updateStudyStreak(state, nowMs);
+  updateStudyStreak(state, nowMs, unixDay);
 
   state.currentKey = key; // ring distance pivots on the card just rated
   for (const b of state.batch) {

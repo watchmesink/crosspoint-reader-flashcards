@@ -102,7 +102,38 @@ function readDeckFileContents(deck) {
   return fs
     .readdirSync(dir)
     .filter((n) => !n.startsWith('.') && /\.txt$/i.test(n))
-    .map((name) => ({ name, content: fs.readFileSync(path.join(dir, name), 'utf8') }));
+    .map((name) => {
+      const full = path.join(dir, name);
+      // mtime feeds the scheduler's newest-uploads-first batch top-up
+      return { name, content: fs.readFileSync(full, 'utf8'), mtime: fs.statSync(full).mtimeMs };
+    });
+}
+
+// Streak days are counted in the study timezone (STREAK_TZ), not server UTC:
+// a session just after local midnight must count as the new local day, or
+// daily-but-late study shows phantom gaps and resets the streak.
+const STREAK_TZ = process.env.STREAK_TZ || 'UTC';
+function localUnixDay(nowMs = Date.now()) {
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: STREAK_TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const [y, m, d] = fmt.format(new Date(nowMs)).split('-').map(Number);
+    return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+  } catch {
+    return engine.currentUnixDay(nowMs);
+  }
+}
+
+// The stored streak only updates on rating, so after a missed day it keeps
+// showing the old run until the next rating "notices" the gap. Display 0 for a
+// lapsed streak instead of a stale count.
+function effectiveStreakDays(state) {
+  if (!state || state.lastStudyUnixDay < 0) return 0;
+  return localUnixDay() - state.lastStudyUnixDay > 1 ? 0 : state.streakDays;
 }
 
 function loadState(deck) {
@@ -217,7 +248,7 @@ function deckSummary(deckDef) {
     label: deckDef.label,
     total: cards.length,
     memorized: engine.countMemorized(state, cards),
-    streakDays: state.streakDays,
+    streakDays: effectiveStreakDays(state),
     reviewStep: state.reviewStep,
     dueNow: engine.countDue(state),
     files: listDeckFiles(deckDef.id).length,
@@ -234,7 +265,7 @@ function deckView(deckId) {
     label: deckDef.label,
     total: cards.length,
     memorized: engine.countMemorized(state, cards),
-    streakDays: state.streakDays,
+    streakDays: effectiveStreakDays(state),
     reviewStep: state.reviewStep,
     batchSize: state.batch.length, // actual live batch length (may be < configured for small decks)
     configuredBatchSize: settings.batchSize,
@@ -580,7 +611,7 @@ async function handleApi(req, res, url) {
     const key = Number(body.key) >>> 0;
     if (rating === undefined) return send(res, 400, { error: 'rating must be hard|good|easy' });
     const { cards, state, settings } = openDeck(deck);
-    if (!engine.rateCard(state, cards, key, rating, Date.now(), settings.batchSize)) {
+    if (!engine.rateCard(state, cards, key, rating, Date.now(), settings.batchSize, localUnixDay())) {
       return send(res, 404, { error: 'card not found' });
     }
     saveState(deck, state);
